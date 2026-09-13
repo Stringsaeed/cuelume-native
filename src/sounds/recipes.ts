@@ -5,6 +5,8 @@
  * the same click. Add a new one here without touching any audio graph code.
  */
 
+import type { BiquadFilterType, OscillatorType } from "react-native-audio-api";
+
 type BaseLayer = {
   /** Seconds after the trigger that this layer starts. */
   offset?: number;

@@ -1,17 +1,23 @@
 /**
- * Cuelume — curated interaction sounds synthesized via the Web Audio API.
- * No audio files, no dependencies, one shared `AudioContext`.
- *
- * Declarative:
- *   import { bind } from "cuelume";
- *   bind(); // wires up all data-cuelume-* attributes
+ * Cuelume Native — curated interaction sounds synthesized via
+ * `react-native-audio-api`, a native Web Audio API implementation. No audio
+ * files, no bundled dependencies, one shared `AudioContext`.
  *
  * Imperative:
- *   import { play } from "cuelume";
+ *   import { play } from "cuelume-native";
  *   play("droplet");
+ *
+ * Hook:
+ *   import { useCuelumeSound } from "cuelume-native";
+ *   const sound = useCuelumeSound({ toggle: "success" });
+ *   <Pressable {...sound}>Save</Pressable>
  */
 
 export type { SoundName } from "./sounds/recipes.js";
 export { sounds } from "./sounds/recipes.js";
 export { play, setEnabled, setVolume } from "./audio/engine.js";
-export { bind } from "./interactions/bind.js";
+export {
+  useCuelumeSound,
+  type CuelumeSoundHandlers,
+  type CuelumeSoundOptions,
+} from "./interactions/useCuelumeSound.js";

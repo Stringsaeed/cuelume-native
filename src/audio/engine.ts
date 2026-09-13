@@ -1,9 +1,14 @@
 /**
- * The audio engine — synthesizes each sound live via the Web Audio API
- * on one shared, lazily created `AudioContext`. No audio files, no
- * dependencies. Every sound carries a gentle envelope (and often a soft
- * shimmer tail) instead of a hard transient, so nothing feels harsh.
+ * The audio engine — synthesizes each sound live via `react-native-audio-api`
+ * (a native Web Audio API implementation) on one shared, lazily created
+ * `AudioContext`. No audio files, no bundled dependencies. Every sound
+ * carries a gentle envelope (and often a soft shimmer tail) instead of a
+ * hard transient, so nothing feels harsh.
  */
+
+import { AudioContext, AudioManager } from "react-native-audio-api";
+import type { AudioNode, GainNode } from "react-native-audio-api";
+import { Platform } from "react-native";
 
 import {
   RECIPES,
@@ -19,6 +24,9 @@ const SOURCE_STOP_PADDING = 0.05;
 const CLEANUP_MARGIN = 0.05;
 const INAUDIBLE_GAIN = 0.001;
 const OUTPUT_GAIN = 4;
+/** Drive for the soft-clip limiter curve — higher rounds harder, closer to the knee. */
+const LIMITER_DRIVE = 1.5;
+const LIMITER_CURVE_SAMPLES = 1024;
 
 function renderTone(
   context: AudioContext,
@@ -121,6 +129,24 @@ function shimmerTail(shimmer?: Shimmer): number {
   return shimmer.delay * (1 + Math.ceil(Math.log(INAUDIBLE_GAIN) / Math.log(shimmer.feedback)));
 }
 
+/**
+ * `react-native-audio-api` has no `DynamicsCompressorNode` yet, so the
+ * output limiter is approximated with a static soft-clip curve on a
+ * `WaveShaperNode` instead of true time-based compression. It has no
+ * attack/release, but these are short percussive cues, not sustained
+ * program material, so a static curve is enough to round off overlap
+ * peaks without a harsh clip.
+ */
+function createLimiterCurve(samples = LIMITER_CURVE_SAMPLES): Float32Array {
+  const curve = new Float32Array(samples);
+  const normalizer = Math.tanh(LIMITER_DRIVE);
+  for (let i = 0; i < samples; i++) {
+    const x = (i / (samples - 1)) * 2 - 1;
+    curve[i] = Math.tanh(x * LIMITER_DRIVE) / normalizer;
+  }
+  return curve;
+}
+
 let sharedOutput: GainNode | null = null;
 
 function getOutput(context: AudioContext): GainNode {
@@ -129,12 +155,9 @@ function getOutput(context: AudioContext): GainNode {
   const output = context.createGain();
   output.gain.value = OUTPUT_GAIN;
 
-  const limiter = context.createDynamicsCompressor();
-  limiter.threshold.value = -8;
-  limiter.knee.value = 6;
-  limiter.ratio.value = 12;
-  limiter.attack.value = 0.002;
-  limiter.release.value = 0.08;
+  const limiter = context.createWaveShaper();
+  limiter.curve = createLimiterCurve();
+  limiter.oversample = "4x";
 
   output.connect(limiter).connect(context.destination);
   sharedOutput = output;
@@ -166,6 +189,7 @@ function renderRecipe(context: AudioContext, recipe: SoundRecipe, volume: number
 }
 
 let sharedContext: AudioContext | null = null;
+let sessionConfigured = false;
 let enabled = true;
 let globalVolume = 1;
 
@@ -185,15 +209,30 @@ export function setVolume(value: number): void {
   globalVolume = normalizeVolume(value, globalVolume);
 }
 
+/**
+ * Configures the iOS audio session so interaction sounds behave like system
+ * UI sounds: they respect the silent switch and never interrupt whatever
+ * else the user is playing. Runs once, lazily, on first use. Android has no
+ * equivalent session-category concept, so this is a no-op there.
+ */
+function configureAudioSession(): void {
+  if (sessionConfigured || Platform.OS !== "ios") return;
+  sessionConfigured = true;
+  try {
+    AudioManager.setAudioSessionOptions({
+      iosCategory: "ambient",
+      iosOptions: ["mixWithOthers"],
+    });
+  } catch {
+    // Best-effort: playback still works without a configured session.
+  }
+}
+
 function getAudioContext(): AudioContext | null {
   if (sharedContext) return sharedContext;
-  if (typeof window === "undefined") return null;
-  const Ctor =
-    window.AudioContext ??
-    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!Ctor) return null;
+  configureAudioSession();
   try {
-    sharedContext = new Ctor();
+    sharedContext = new AudioContext();
   } catch {
     return null;
   }
@@ -202,13 +241,11 @@ function getAudioContext(): AudioContext | null {
 
 /**
  * Plays a sound immediately. Safe to call from anywhere — lazily creates
- * the shared `AudioContext` on first use, resumes it if the browser
- * started it suspended (e.g. before any user gesture), and is a no-op
- * when Web Audio is unavailable (SSR, old browsers).
+ * the shared `AudioContext` on first use, resumes it if it started
+ * suspended, and is a no-op when the native audio module is unavailable.
  */
 export function play(sound: SoundName = "chime", options?: { volume?: number }): void {
   if (!enabled || !isSoundName(sound)) return;
-  if (typeof navigator !== "undefined" && navigator.userActivation?.hasBeenActive === false) return;
 
   const playVolume = globalVolume * normalizeVolume(options?.volume, 1);
   if (playVolume === 0) return;
@@ -228,7 +265,7 @@ export function play(sound: SoundName = "chime", options?: { volume?: number }):
         () => {},
       );
     } catch {
-      // Some browsers throw synchronously when audio is blocked.
+      // Defensive: mirrors the resume() guard in case it throws synchronously.
     }
   }
 }

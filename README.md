@@ -1,83 +1,81 @@
-# Cuelume
+# Cuelume Native
 
-Seventeen carefully designed interaction sounds for the web. Synthesized live with Web Audio, with no audio files and zero runtime dependencies.
+Seventeen carefully designed interaction sounds for React Native & Expo. Synthesized live with [`react-native-audio-api`](https://github.com/software-mansion/react-native-audio-api), with no audio files and zero bundled runtime dependencies.
 
-Cuelume is a curated sound palette, not an audio engine. It gives buttons, links, toggles, and completed actions clear feedback without asking developers to design sounds themselves. Add an attribute, call `bind()`, done.
+Cuelume Native is a curated sound palette, not an audio engine. It gives buttons, toggles, and completed actions clear feedback without asking developers to design sounds themselves. Call `play()`, or wire a `Pressable` with `useCuelumeSound()`, done.
+
+This is a native-only fork of [`cuelume`](https://github.com/Danilaa1/cuelume) by Daniel Belyi — same sound recipes and synthesis logic, ported from the browser's Web Audio API to `react-native-audio-api`. If you need the web version, use the original `cuelume` package instead.
 
 ## Install
 
 ```sh
-npm install cuelume
+npx expo install cuelume-native react-native-audio-api react-native-worklets
 ```
+
+`react-native-audio-api` has native code, so **this does not work in Expo Go** — you need a [development build](https://docs.expo.dev/develop/development-builds/introduction/) (`npx expo run:ios` / `npx expo run:android`, or an EAS dev build).
+
+See [`example/`](./example) for a runnable Expo app exercising every sound and the hook.
 
 ## Requirements
 
-Cuelume is ESM-only. Use it through native `import` or an ESM-compatible bundler; CommonJS `require()` is not supported.
-
-It targets modern browsers with ES modules and the Web Audio API. Server-side imports are safe, but sound playback only runs in the browser.
+- React Native 0.74+, React 18+.
+- `react-native-audio-api` and `react-native-worklets` as peer dependencies (see Install above).
+- Cuelume Native is ESM-only. Use it through native `import` or an ESM-compatible bundler (Metro handles this automatically).
 
 ## Quick start
 
-Add data attributes to your markup:
-
-```html
-<button data-cuelume-press data-cuelume-release>Save</button>
-<a data-cuelume-hover="tick">Docs</a>
-<button data-cuelume-toggle>Dark mode</button>
-<button data-cuelume-press="pulse" data-cuelume-release="scan">Launch</button>
-```
-
-Then wire everything up once:
+Play a sound imperatively, from anywhere:
 
 ```ts
-import { bind } from "cuelume";
+import { play } from "cuelume-native";
 
-bind();
-```
-
-| Attribute              | Fires on       | Default sound |
-| ---------------------- | -------------- | ------------- |
-| `data-cuelume-hover`   | `pointerenter` | `chime`       |
-| `data-cuelume-press`   | `pointerdown`  | `press`       |
-| `data-cuelume-release` | `pointerup`    | `release`     |
-| `data-cuelume-toggle`  | `click`        | `toggle`      |
-
-Leave the attribute value empty to use the default, or set it to any sound name.
-
-Prefer code? Play sounds imperatively:
-
-```ts
-import { play } from "cuelume";
-
-await navigator.clipboard.writeText(text);
+await Clipboard.setStringAsync(text);
 play("success");
 play("success", { volume: 0.4 }); // quieter for this play only
 ```
 
-Need sound preferences? Your app owns the settings; Cuelume only applies them:
+Wire a `Pressable` with press/release/toggle sounds — the native equivalent of the web package's `bind()`:
+
+```tsx
+import { Pressable, Text } from "react-native";
+import { useCuelumeSound } from "cuelume-native";
+
+function SaveButton() {
+  const sound = useCuelumeSound({ toggle: "success" });
+  return (
+    <Pressable {...sound}>
+      <Text>Save</Text>
+    </Pressable>
+  );
+}
+```
+
+`useCuelumeSound` defaults to `press`/`release`/`toggle` for its three sounds — matching the web package's `data-cuelume-press`/`-release`/`-toggle` defaults. Pass `false` for any of them to skip that sound, or a specific `SoundName` to override it. There's no native equivalent of `data-cuelume-hover` — touch devices have no hover state.
+
+Need sound preferences? Your app owns the settings; Cuelume Native only applies them:
 
 ```ts
-import { setEnabled, setVolume } from "cuelume";
+import { setEnabled, setVolume } from "cuelume-native";
 
 setVolume(0.7);    // global multiplier, clamped to 0–1
 setEnabled(false); // future play attempts become no-ops
 setEnabled(true);  // enable playback again
 ```
 
-Cuelume starts enabled at full volume and does not read or write storage.
+Cuelume Native starts enabled at full volume and does not read or write storage.
 
 ## Sounds
 
 | Name      | Character                    | Suggested use                    |
 | --------- | ---------------------------- | -------------------------------- |
-| `chime`   | Soft two-note ascending bell | Default hover                    |
+| `chime`   | Soft two-note ascending bell | Confirmations                    |
 | `sparkle` | Quick four-note twinkle      | Playful accents                  |
 | `droplet` | Single note gliding down     | Dismiss, collapse                |
 | `bloom`   | Warm slow swell              | Reveal, expand                   |
 | `whisper` | Soft hush with a falling tone | Tooltips and quiet previews      |
-| `tick`    | Crisp instant tick           | Nav and menu hover               |
-| `press`   | Dull muted knock             | Pointer down                     |
-| `release` | Brighter springy tick        | Pointer up                       |
+| `tick`    | Crisp instant tick           | Nav and menu selection           |
+| `press`   | Dull muted knock             | Press in                         |
+| `release` | Brighter springy tick        | Press out                        |
 | `toggle`  | Mechanical click-clack       | Switches, tabs                   |
 | `success` | Warm three-note confirmation | After an action succeeds (e.g. copy to clipboard) |
 | `error`   | Soft knock and descending refusal | Recoverable errors          |
@@ -86,16 +84,16 @@ Cuelume starts enabled at full volume and does not read or write storage.
 | `ready`   | Rising lock-on with a clear resolve | Content or system ready     |
 | `pulse`   | Compact synthetic chirp         | Primary buttons and controls  |
 | `scan`    | Fast three-step locator signal  | Menus and secondary buttons   |
-| `arrival` | Rising harmonic portal          | Client-side page arrivals     |
+| `arrival` | Rising harmonic portal          | Screen/route arrivals         |
 
 ## API
 
 ```ts
-import { play, bind, setEnabled, setVolume, sounds, type SoundName } from "cuelume";
+import { play, useCuelumeSound, setEnabled, setVolume, sounds, type SoundName } from "cuelume-native";
 ```
 
 - **`play(name?: SoundName, options?: { volume?: number })`** — play a sound immediately. Defaults to `"chime"`; `options.volume` controls this play only.
-- **`bind(root?: ParentNode)`** — delegate all `data-cuelume-*` interactions under `root` (defaults to the whole document). Idempotent and handles elements added later.
+- **`useCuelumeSound(options?: { press?, release?, toggle? })`** — returns `{ onPressIn, onPressOut, onPress }` to spread onto a `Pressable`. Each option is a `SoundName` (defaults: `press`/`release`/`toggle`) or `false` to disable that sound.
 - **`setEnabled(enabled: boolean)`** — enable or disable future playback. Does not persist the preference or stop sounds already playing.
 - **`setVolume(volume: number)`** — set the global volume for future playback, clamped to `0–1`. Non-finite values are ignored and preferences are not persisted.
 - **`sounds`** — the list of all sound names.
@@ -103,38 +101,11 @@ import { play, bind, setEnabled, setVolume, sounds, type SoundName } from "cuelu
 
 ## Defaults that behave
 
-- **Pointer-aware.** Hover requires a fine mouse pointer. Press and release support mouse, touch, and pen; toggle follows native click activation, including keyboard.
-- **Hover repeat guard.** Hover sounds are globally throttled to one every 150ms, so sweeping across a menu stays quiet.
-- **Audible without clipping.** One shared boosted output stage keeps sounds clear, with native compression protecting overlapping cues.
+- **Audible without harsh clipping.** One shared boosted output stage keeps sounds clear, softened by a limiter curve on overlapping cues. (`react-native-audio-api` has no `DynamicsCompressorNode` yet, so this is a static soft-clip curve rather than true time-based compression — plenty for these short, percussive cues.)
 - **One lazy `AudioContext`.** Shared across all sounds, created on first use.
-- **Autoplay-friendly.** Attempts to resume suspended audio without surfacing errors when a browser blocks it.
-- **SSR-safe.** Importing on the server is a no-op.
-- **Safe fallback.** Invalid runtime names and unavailable or blocked Web Audio make `play()` a silent no-op.
-- **Dynamic, idempotent binding.** `bind()` never double-attaches listeners, and later DOM additions, removals, and clones work automatically.
-
-## Frameworks
-
-Cuelume works anywhere HTML does — plain pages, Astro, React, Vue. Call `bind()` once after the DOM is ready. Delegated listeners keep working when components or routes replace descendants.
-
-React:
-
-```tsx
-useEffect(() => {
-  bind();
-}, []);
-```
-
-Astro (with view transitions):
-
-```js
-import { bind, play } from "cuelume";
-
-bind();
-document.addEventListener("astro:page-load", () => play("arrival"));
-```
-
-Browsers block audio on a fresh visit until the user interacts with the page. The arrival cue therefore plays on client-side navigations after that first interaction.
+- **iOS audio session configured for you.** Sounds play under the `ambient` session category — they respect the silent switch and never interrupt music or other audio, like standard iOS UI sounds.
+- **Safe fallback.** Invalid sound names, a disabled state, or an unavailable native audio module all make `play()` a silent no-op.
 
 ## License
 
-MIT
+MIT. Portions © 2026 Daniel Belyi (original [`cuelume`](https://github.com/Danilaa1/cuelume)); see [LICENSE](./LICENSE).

@@ -1,0 +1,12 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    // `cuelume-native` isn't an installed dependency here (see metro.config.js
+    // and the example README for why) — this just points the type checker
+    // at the workspace root's build output.
+    "paths": {
+      "cuelume-native": ["../dist/index.d.ts"]
+    }
+  }
+}

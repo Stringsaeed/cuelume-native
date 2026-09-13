@@ -1,70 +1,43 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const originals = new Map();
-
-function setGlobal(name, value) {
-  if (!originals.has(name)) originals.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
-  Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
-}
-
-function restoreGlobals() {
-  for (const [name, descriptor] of originals) {
-    if (descriptor) Object.defineProperty(globalThis, name, descriptor);
-    else delete globalThis[name];
-  }
-  originals.clear();
-}
-
 const audioParam = () => ({
   value: 0,
   setValueAtTime() {},
   exponentialRampToValueAtTime() {},
 });
 
-function compressor(node) {
-  return Object.assign(node, {
-    threshold: audioParam(),
-    knee: audioParam(),
-    ratio: audioParam(),
-    attack: audioParam(),
-    release: audioParam(),
+// The real `react-native-audio-api`/`react-native` packages assume a Metro +
+// native runtime and can't be loaded under plain Node — every test that
+// touches `dist/` (even indirectly, e.g. via `index.js`) must mock both
+// before importing, so the real packages are never reached.
+function mockAudioApi(t, AudioContextClass = class {}) {
+  const AudioManager = {
+    calls: [],
+    setAudioSessionOptions(options) {
+      this.calls.push(options);
+    },
+  };
+  t.mock.module("react-native-audio-api", {
+    exports: { AudioContext: AudioContextClass, AudioManager },
   });
+  return AudioManager;
 }
 
-test("expanded palette exposes sci-fi interaction and arrival cues", async () => {
+function mockPlatform(t, os = "ios") {
+  t.mock.module("react-native", { exports: { Platform: { OS: os } } });
+}
+
+test("expanded palette exposes sci-fi interaction and arrival cues", async (t) => {
+  mockPlatform(t);
+  mockAudioApi(t);
   const { setVolume, sounds } = await import("../dist/index.js");
   assert.equal(sounds.length, 17);
   assert.deepEqual(sounds.slice(-3), ["pulse", "scan", "arrival"]);
   assert.equal(typeof setVolume, "function");
 });
 
-test("play waits for user activation before creating AudioContext", async (context) => {
-  context.after(restoreGlobals);
-  let constructions = 0;
-  const userActivation = { hasBeenActive: false };
-
-  class ThrowingContext {
-    constructor() {
-      constructions++;
-      throw new Error("blocked");
-    }
-  }
-
-  setGlobal("navigator", { userActivation });
-  setGlobal("window", { AudioContext: ThrowingContext });
-  const { play } = await import(`../dist/audio/engine.js?activation=${Date.now()}`);
-
-  play("chime");
-  assert.equal(constructions, 0);
-
-  userActivation.hasBeenActive = true;
-  play("chime");
-  assert.equal(constructions, 1);
-});
-
-test("invalid names and AudioContext failures are silent", async (context) => {
-  context.after(restoreGlobals);
+test("an AudioContext that throws is a silent no-op", async (t) => {
   let constructions = 0;
 
   class ThrowingContext {
@@ -74,18 +47,21 @@ test("invalid names and AudioContext failures are silent", async (context) => {
     }
   }
 
-  setGlobal("window", { AudioContext: ThrowingContext });
-  const { play, setEnabled } = await import(`../dist/audio/engine.js?failures=${Date.now()}`);
+  mockPlatform(t);
+  mockAudioApi(t, ThrowingContext);
+  const { play, setEnabled } = await import(`../dist/audio/engine.js?throwing=${Date.now()}`);
 
   assert.doesNotThrow(() => play("toString"));
-  assert.equal(constructions, 0);
+  assert.equal(constructions, 0, "invalid sound names never reach the context");
   setEnabled(false);
   assert.doesNotThrow(() => play("chime"));
-  assert.equal(constructions, 0);
+  assert.equal(constructions, 0, "disabled playback never reaches the context");
   setEnabled(true);
   assert.doesNotThrow(() => play("chime"));
   assert.equal(constructions, 1);
+});
 
+test("a suspended AudioContext whose resume() rejects renders nothing", async (t) => {
   let renders = 0;
   class RejectedContext {
     state = "suspended";
@@ -97,12 +73,17 @@ test("invalid names and AudioContext failures are silent", async (context) => {
     }
   }
 
-  setGlobal("window", { AudioContext: RejectedContext });
-  const rejected = await import(`../dist/audio/engine.js?rejected=${Date.now()}`);
-  assert.doesNotThrow(() => rejected.play("chime"));
+  mockPlatform(t);
+  mockAudioApi(t, RejectedContext);
+  const { play } = await import(`../dist/audio/engine.js?rejected=${Date.now()}`);
+
+  assert.doesNotThrow(() => play("chime"));
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(renders, 0);
+});
 
+test("disabling playback mid-resume skips the render once it settles", async (t) => {
+  let renders = 0;
   let finishResume = () => {};
   class DeferredContext {
     state = "suspended";
@@ -121,20 +102,110 @@ test("invalid names and AudioContext failures are silent", async (context) => {
     }
   }
 
-  setGlobal("window", { AudioContext: DeferredContext });
-  const deferred = await import(`../dist/audio/engine.js?deferred=${Date.now()}`);
-  deferred.play("chime");
-  deferred.setEnabled(false);
+  mockPlatform(t);
+  mockAudioApi(t, DeferredContext);
+  const { play, setEnabled } = await import(`../dist/audio/engine.js?deferred=${Date.now()}`);
+
+  play("chime");
+  setEnabled(false);
   finishResume();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(renders, 0);
-
 });
 
-test("volume is clamped and one boosted output bus is reused", async (context) => {
-  context.after(restoreGlobals);
+test("iOS audio session is configured once, lazily, before first playback", async (t) => {
+  class AudioNodeStub {
+    connect(destination) {
+      return destination;
+    }
+    disconnect() {}
+  }
+
+  class SilentContext {
+    state = "running";
+    currentTime = 0;
+    sampleRate = 1;
+    destination = new AudioNodeStub();
+    createGain() {
+      return Object.assign(new AudioNodeStub(), { gain: audioParam() });
+    }
+    createWaveShaper() {
+      return Object.assign(new AudioNodeStub(), { curve: null, oversample: "none" });
+    }
+    createOscillator() {
+      return Object.assign(new AudioNodeStub(), {
+        frequency: audioParam(),
+        detune: audioParam(),
+        start() {},
+        stop() {},
+      });
+    }
+    createBuffer() {
+      return { getChannelData: () => new Float32Array(1) };
+    }
+    createBufferSource() {
+      return Object.assign(new AudioNodeStub(), { buffer: null, start() {}, stop() {} });
+    }
+    createBiquadFilter() {
+      return Object.assign(new AudioNodeStub(), { frequency: audioParam(), Q: audioParam() });
+    }
+    createDelay() {
+      return Object.assign(new AudioNodeStub(), { delayTime: audioParam() });
+    }
+  }
+
+  mockPlatform(t, "ios");
+  const AudioManager = mockAudioApi(t, SilentContext);
+  const { play } = await import(`../dist/audio/engine.js?session-ios=${Date.now()}`);
+
+  play("chime");
+  assert.deepEqual(AudioManager.calls, [{ iosCategory: "ambient", iosOptions: ["mixWithOthers"] }]);
+
+  play("tick");
+  assert.equal(AudioManager.calls.length, 1, "session is only configured once per context");
+});
+
+test("audio session is left alone on Android", async (t) => {
+  class AudioNodeStub {
+    connect(destination) {
+      return destination;
+    }
+    disconnect() {}
+  }
+
+  class SilentContext {
+    state = "running";
+    currentTime = 0;
+    sampleRate = 1;
+    destination = new AudioNodeStub();
+    createGain() {
+      return Object.assign(new AudioNodeStub(), { gain: audioParam() });
+    }
+    createWaveShaper() {
+      return Object.assign(new AudioNodeStub(), { curve: null, oversample: "none" });
+    }
+    createBuffer() {
+      return { getChannelData: () => new Float32Array(1) };
+    }
+    createBufferSource() {
+      return Object.assign(new AudioNodeStub(), { buffer: null, start() {}, stop() {} });
+    }
+    createBiquadFilter() {
+      return Object.assign(new AudioNodeStub(), { frequency: audioParam(), Q: audioParam() });
+    }
+  }
+
+  mockPlatform(t, "android");
+  const AudioManager = mockAudioApi(t, SilentContext);
+  const { play } = await import(`../dist/audio/engine.js?session-android=${Date.now()}`);
+
+  play("press");
+  assert.deepEqual(AudioManager.calls, []);
+});
+
+test("volume is clamped and one boosted output bus is reused", async (t) => {
   const gains = [];
-  const compressors = [];
+  const waveShapers = [];
 
   class AudioNodeStub {
     constructor(name) {
@@ -158,9 +229,9 @@ test("volume is clamped and one boosted output bus is reused", async (context) =
       gains.push(gain);
       return gain;
     }
-    createDynamicsCompressor() {
-      const node = compressor(new AudioNodeStub("compressor"));
-      compressors.push(node);
+    createWaveShaper() {
+      const node = Object.assign(new AudioNodeStub("limiter"), { curve: null, oversample: "none" });
+      waveShapers.push(node);
       return node;
     }
     createBuffer() {
@@ -181,9 +252,8 @@ test("volume is clamped and one boosted output bus is reused", async (context) =
     }
   }
 
-  setGlobal("setTimeout", () => 0);
-  setGlobal("window", { AudioContext: VolumeContext });
-
+  mockPlatform(t);
+  mockAudioApi(t, VolumeContext);
   const { play, setVolume } = await import(`../dist/audio/engine.js?volume=${Date.now()}`);
 
   setVolume(2);
@@ -205,166 +275,13 @@ test("volume is clamped and one boosted output bus is reused", async (context) =
     [0.2, 0.1, 0.2, 0.2],
   );
   assert.ok(output.gain.value > 1);
-  assert.equal(compressors.length, 1);
-  assert.deepEqual(output.connections, [compressors[0]]);
-  assert.equal(compressors[0].connections.length, 1);
-  assert.equal(compressors[0].connections[0].name, "destination");
+  assert.equal(waveShapers.length, 1);
+  assert.deepEqual(output.connections, [waveShapers[0]]);
+  assert.equal(waveShapers[0].connections.length, 1);
+  assert.equal(waveShapers[0].connections[0].name, "destination");
 });
 
-test("binding is delegated, dynamic, idempotent, and globally throttled", async (context) => {
-  context.after(restoreGlobals);
-  const counts = { buffers: 0, oscillators: 0 };
-
-  class AudioNodeStub {
-    connect(destination) {
-      return destination;
-    }
-    disconnect() {}
-  }
-
-  class WorkingContext {
-    state = "running";
-    currentTime = 0;
-    sampleRate = 1;
-    destination = new AudioNodeStub();
-    createGain() {
-      return Object.assign(new AudioNodeStub(), { gain: audioParam() });
-    }
-    createDynamicsCompressor() {
-      return compressor(new AudioNodeStub());
-    }
-    createOscillator() {
-      return Object.assign(new AudioNodeStub(), {
-        frequency: audioParam(),
-        detune: audioParam(),
-        start() {
-          counts.oscillators++;
-        },
-        stop() {},
-      });
-    }
-    createBuffer() {
-      counts.buffers++;
-      return { getChannelData: () => new Float32Array(1) };
-    }
-    createBufferSource() {
-      return Object.assign(new AudioNodeStub(), { buffer: null, start() {}, stop() {} });
-    }
-    createBiquadFilter() {
-      return Object.assign(new AudioNodeStub(), { frequency: audioParam(), Q: audioParam() });
-    }
-    createDelay() {
-      return Object.assign(new AudioNodeStub(), { delayTime: audioParam() });
-    }
-  }
-
-  class FakeElement {
-    constructor(parent = null) {
-      this.parent = parent;
-      this.attributes = new Map();
-      this.listeners = new Map();
-    }
-    addEventListener(type, listener) {
-      const listeners = this.listeners.get(type) ?? [];
-      listeners.push(listener);
-      this.listeners.set(type, listeners);
-    }
-    emit(type, target = this, options = {}) {
-      const event = { target, relatedTarget: null, pointerType: "mouse", ...options };
-      for (const listener of this.listeners.get(type) ?? []) listener(event);
-    }
-    setAttribute(name, value = "") {
-      this.attributes.set(name, value);
-    }
-    removeAttribute(name) {
-      this.attributes.delete(name);
-    }
-    getAttribute(name) {
-      return this.attributes.get(name) ?? null;
-    }
-    hasAttribute(name) {
-      return this.attributes.has(name);
-    }
-    closest(selector) {
-      const attribute = selector.slice(1, -1);
-      for (let element = this; element; element = element.parent) {
-        if (element.hasAttribute(attribute)) return element;
-      }
-      return null;
-    }
-    contains(candidate) {
-      for (let element = candidate; element; element = element.parent) {
-        if (element === this) return true;
-      }
-      return false;
-    }
-  }
-
-  let now = 1_000;
-  setGlobal("Element", FakeElement);
-  setGlobal("Node", FakeElement);
-  setGlobal("document", {});
-  setGlobal("performance", { now: () => now });
-  setGlobal("setTimeout", () => 0);
-  setGlobal("window", {
-    AudioContext: WorkingContext,
-    matchMedia: () => ({ matches: true }),
-  });
-
-  const root = new FakeElement();
-  const { bind } = await import(`../dist/interactions/bind.js?binding=${Date.now()}`);
-  bind(root);
-  bind(root);
-  assert.equal(root.listeners.get("pointerenter").length, 1);
-  assert.equal(root.listeners.get("pointerdown").length, 1);
-  assert.equal(root.listeners.get("pointerup").length, 1);
-  assert.equal(root.listeners.get("click").length, 1);
-
-  const first = new FakeElement(root);
-  first.setAttribute("data-cuelume-hover", "whisper");
-  root.emit("pointerenter", first);
-  assert.equal(counts.buffers, 1);
-
-  const later = new FakeElement(root);
-  later.setAttribute("data-cuelume-hover", "whisper");
-  now += 100;
-  root.emit("pointerenter", later);
-  assert.equal(counts.buffers, 1);
-
-  now += 51;
-  root.emit("pointerenter", later);
-  assert.equal(counts.buffers, 2);
-
-  later.setAttribute("data-cuelume-toggle", "whisper");
-  root.emit("click", later, { pointerType: undefined });
-  assert.equal(counts.buffers, 3);
-  later.removeAttribute("data-cuelume-toggle");
-  root.emit("click", later, { pointerType: undefined });
-  assert.equal(counts.buffers, 3);
-
-  const touchTarget = new FakeElement(root);
-  touchTarget.setAttribute("data-cuelume-press", "whisper");
-  touchTarget.setAttribute("data-cuelume-release", "whisper");
-  root.emit("pointerdown", touchTarget, { pointerType: "touch" });
-  root.emit("pointerup", touchTarget, { pointerType: "touch" });
-  assert.equal(counts.buffers, 5);
-
-  const invalid = new FakeElement(root);
-  invalid.setAttribute("data-cuelume-hover", "toString");
-  const oscillatorsBeforeInvalid = counts.oscillators;
-  now += 151;
-  root.emit("pointerenter", invalid);
-  assert.equal(counts.oscillators, oscillatorsBeforeInvalid + 2);
-
-  const child = new FakeElement(later);
-  now += 151;
-  root.emit("pointerenter", child, { relatedTarget: later });
-  assert.equal(counts.buffers, 5);
-
-});
-
-test("finished shimmer graphs disconnect after their audible tail", async (context) => {
-  context.after(restoreGlobals);
+test("finished shimmer graphs disconnect after their audible tail", async (t) => {
   const timers = [];
   const disconnected = [];
   const nodes = new Map();
@@ -394,8 +311,8 @@ test("finished shimmer graphs disconnect after their audible tail", async (conte
       const names = ["output", "master", "feedback-gain", "wet-gain", "tone-gain", "tone-gain"];
       return Object.assign(new AudioNodeStub(names[gainCount++] ?? "gain"), { gain: audioParam() });
     }
-    createDynamicsCompressor() {
-      return compressor(new AudioNodeStub("limiter"));
+    createWaveShaper() {
+      return Object.assign(new AudioNodeStub("limiter"), { curve: null, oversample: "none" });
     }
     createDelay() {
       return Object.assign(new AudioNodeStub("delay"), { delayTime: audioParam() });
@@ -416,12 +333,17 @@ test("finished shimmer graphs disconnect after their audible tail", async (conte
     }
   }
 
-  setGlobal("setTimeout", (callback, delay) => {
+  const originalSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (callback, delay) => {
     timers.push({ callback, delay });
     return 0;
+  };
+  t.after(() => {
+    globalThis.setTimeout = originalSetTimeout;
   });
-  setGlobal("window", { AudioContext: CleanupContext });
 
+  mockPlatform(t);
+  mockAudioApi(t, CleanupContext);
   const { play } = await import(`../dist/audio/engine.js?cleanup=${Date.now()}`);
   play("chime");
 
@@ -436,4 +358,15 @@ test("finished shimmer graphs disconnect after their audible tail", async (conte
 
   play("chime");
   assert.equal(timers.length, 2);
+});
+
+test("useCuelumeSound resolves press/release/toggle sounds with bind()'s defaults", async (t) => {
+  mockPlatform(t);
+  mockAudioApi(t);
+  const { resolveSound } = await import("../dist/interactions/useCuelumeSound.js");
+
+  assert.equal(resolveSound(undefined, "press"), "press");
+  assert.equal(resolveSound("pulse", "press"), "pulse");
+  assert.equal(resolveSound(false, "press"), null);
+  assert.equal(resolveSound("not-a-real-sound", "press"), "press");
 });
