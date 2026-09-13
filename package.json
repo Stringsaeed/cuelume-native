@@ -16,6 +16,9 @@
     "synthesis"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "author": "Muhammed Ibrahim",
   "contributors": [
     "Daniel Belyi (original cuelume author, https://github.com/Danilaa1/cuelume)"
