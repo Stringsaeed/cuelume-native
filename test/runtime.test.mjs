@@ -19,13 +19,13 @@ function mockAudioApi(t, AudioContextClass = class {}) {
     },
   };
   t.mock.module("react-native-audio-api", {
-    exports: { AudioContext: AudioContextClass, AudioManager },
+    namedExports: { AudioContext: AudioContextClass, AudioManager },
   });
   return AudioManager;
 }
 
 function mockPlatform(t, os = "ios") {
-  t.mock.module("react-native", { exports: { Platform: { OS: os } } });
+  t.mock.module("react-native", { namedExports: { Platform: { OS: os } } });
 }
 
 test("expanded palette exposes sci-fi interaction and arrival cues", async (t) => {
