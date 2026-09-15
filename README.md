@@ -104,7 +104,7 @@ Cuelume Native starts enabled at full volume and does not read or write storage.
 ## API
 
 ```ts
-import { play, useCuelumeSound, setEnabled, setVolume, sounds, type SoundName } from "cuelume-native";
+import { play, useCuelumeSound, setEnabled, setVolume, sounds, getSoundWaveform, type SoundName } from "cuelume-native";
 ```
 
 | Export | Signature | Description |
@@ -113,6 +113,7 @@ import { play, useCuelumeSound, setEnabled, setVolume, sounds, type SoundName } 
 | `useCuelumeSound` | `(options?: { press?, release?, toggle? }) => { onPressIn, onPressOut, onPress }` | Returns handlers to spread onto a `Pressable`. Each option is a `SoundName` (defaults: `press`/`release`/`toggle`) or `false` to disable that sound. |
 | `setEnabled` | `(enabled: boolean) => void` | Enable or disable future playback. Doesn't persist the preference or stop sounds already playing. |
 | `setVolume` | `(volume: number) => void` | Set the global volume for future playback, clamped to `0–1`. Non-finite values are ignored. |
+| `getSoundWaveform` | `(name: SoundName, options?: { resolution?: number }) => Promise<SoundWaveform>` | Renders `name`'s real synthesis output offline and returns a compact waveform preview of it — `{ peaks: Float32Array, duration: number, sampleRate: number }`. `peaks` is `resolution` samples (default 180), normalized to its own peak. Independent of `setVolume()`. Throws for an unknown sound name. Useful for building a custom sound picker or preview UI — see [`example/`](./example) for one built with `react-native-skia` + `react-native-reanimated`. |
 | `sounds` | `readonly SoundName[]` | The list of all sound names. |
 | `SoundName` | `type` | Union type of the seventeen sound names. |
 

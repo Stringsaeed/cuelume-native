@@ -7,7 +7,7 @@
  */
 
 import { AudioContext, AudioManager } from "react-native-audio-api";
-import type { AudioNode, GainNode } from "react-native-audio-api";
+import type { AudioNode, BaseAudioContext, GainNode } from "react-native-audio-api";
 import { Platform } from "react-native";
 
 import {
@@ -29,7 +29,7 @@ const LIMITER_DRIVE = 1.5;
 const LIMITER_CURVE_SAMPLES = 1024;
 
 function renderTone(
-  context: AudioContext,
+  context: BaseAudioContext,
   destination: AudioNode,
   layer: ToneLayer,
   startTime: number,
@@ -55,7 +55,7 @@ function renderTone(
 }
 
 function renderNoise(
-  context: AudioContext,
+  context: BaseAudioContext,
   destination: AudioNode,
   layer: NoiseLayer,
   startTime: number,
@@ -86,7 +86,7 @@ function renderNoise(
 
 /** Wires a soft echo/shimmer send off `source`, feeding back into `destination`. */
 function attachShimmer(
-  context: AudioContext,
+  context: BaseAudioContext,
   source: AudioNode,
   destination: AudioNode,
   shimmer: Shimmer,
@@ -114,7 +114,8 @@ function attachShimmer(
   return [delay, feedbackFilter, feedbackGain, wetGain];
 }
 
-function sourceEnd(recipe: SoundRecipe): number {
+/** Total signal duration, including the source-stop padding. Used to size render buffers. */
+export function sourceEnd(recipe: SoundRecipe): number {
   return Math.max(
     ...recipe.layers.map(
       (layer) => (layer.offset ?? 0) + layer.attack + layer.decay + SOURCE_STOP_PADDING,
@@ -122,7 +123,7 @@ function sourceEnd(recipe: SoundRecipe): number {
   );
 }
 
-function shimmerTail(shimmer?: Shimmer): number {
+export function shimmerTail(shimmer?: Shimmer): number {
   if (!shimmer || shimmer.feedback <= 0) return 0;
   if (shimmer.feedback >= 1) return shimmer.delay;
 
@@ -147,10 +148,17 @@ function createLimiterCurve(samples = LIMITER_CURVE_SAMPLES): Float32Array {
   return curve;
 }
 
-let sharedOutput: GainNode | null = null;
+/**
+ * Keyed per context (not a single global) — `renderRecipe` can target either
+ * the shared real-time `AudioContext` or a one-off `OfflineAudioContext` for
+ * waveform rendering, and those must never share a `GainNode`: connecting a
+ * node across two different audio graphs throws.
+ */
+const outputByContext = new WeakMap<BaseAudioContext, GainNode>();
 
-function getOutput(context: AudioContext): GainNode {
-  if (sharedOutput) return sharedOutput;
+function getOutput(context: BaseAudioContext): GainNode {
+  const existing = outputByContext.get(context);
+  if (existing) return existing;
 
   const output = context.createGain();
   output.gain.value = OUTPUT_GAIN;
@@ -160,11 +168,11 @@ function getOutput(context: AudioContext): GainNode {
   limiter.oversample = "4x";
 
   output.connect(limiter).connect(context.destination);
-  sharedOutput = output;
+  outputByContext.set(context, output);
   return output;
 }
 
-function renderRecipe(context: AudioContext, recipe: SoundRecipe, volume: number): void {
+export function renderRecipe(context: BaseAudioContext, recipe: SoundRecipe, volume: number): void {
   const now = context.currentTime;
   const output = getOutput(context);
   const master = context.createGain();

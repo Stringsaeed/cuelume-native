@@ -41,3 +41,14 @@ resolve to the same files two different ways). Instead:
   Node ESM; raw source doesn't have them).
 - `babel.config.js` — registers `react-native-worklets/plugin`, required by
   `react-native-audio-api`.
+
+## Thanks
+
+This example app leans on some great open-source work:
+
+- [cuelume.dev](https://cuelume.dev) — the waveform-preview UI here is directly inspired by the original web showcase.
+- [reacticx](https://reacticx.com) — the Gooey Switch, Squiggly Slider, and Verified Shine components are adapted from their component gallery.
+- [`@gorhom/bottom-sheet`](https://gorhom.dev/react-native-bottom-sheet/) — powers the sound-picker sheet.
+- [`react-native-pulsar`](https://docs.swmansion.com/pulsar/) by Software Mansion — haptic feedback alongside the sounds.
+- [`@shopify/react-native-skia`](https://shopify.github.io/react-native-skia/) — the waveform canvas and app logo.
+- [DynaPuff](https://fonts.google.com/specimen/DynaPuff), [Inter](https://fonts.google.com/specimen/Inter), and [Nanum Gothic Coding](https://fonts.google.com/specimen/Nanum+Gothic+Coding) via [`@expo-google-fonts`](https://github.com/expo/google-fonts).
