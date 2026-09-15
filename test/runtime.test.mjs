@@ -11,7 +11,7 @@ const audioParam = () => ({
 // native runtime and can't be loaded under plain Node — every test that
 // touches `dist/` (even indirectly, e.g. via `index.js`) must mock both
 // before importing, so the real packages are never reached.
-function mockAudioApi(t, AudioContextClass = class {}) {
+function mockAudioApi(t, AudioContextClass = class {}, OfflineAudioContextClass = class {}) {
   const AudioManager = {
     calls: [],
     setAudioSessionOptions(options) {
@@ -19,7 +19,11 @@ function mockAudioApi(t, AudioContextClass = class {}) {
     },
   };
   t.mock.module("react-native-audio-api", {
-    namedExports: { AudioContext: AudioContextClass, AudioManager },
+    namedExports: {
+      AudioContext: AudioContextClass,
+      OfflineAudioContext: OfflineAudioContextClass,
+      AudioManager,
+    },
   });
   return AudioManager;
 }

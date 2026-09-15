@@ -1,32 +1,48 @@
-import { StatusBar } from "expo-status-bar";
 import { useState } from "react";
 import {
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  Text,
-  View,
-} from "react-native";
-import { play, setEnabled, setVolume, sounds, useCuelumeSound, type SoundName } from "cuelume-native";
+  DynaPuff_600SemiBold,
+  DynaPuff_700Bold,
+} from "@expo-google-fonts/dynapuff";
+import {
+  Inter_400Regular,
+  Inter_500Medium,
+  Inter_600SemiBold,
+} from "@expo-google-fonts/inter";
+import { NanumGothicCoding_400Regular } from "@expo-google-fonts/nanum-gothic-coding";
+import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
+import { setEnabled, setVolume, useCuelumeSound } from "cuelume-native";
+import { useFonts } from "expo-font";
+import { StatusBar } from "expo-status-bar";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { Presets } from "react-native-pulsar";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
-const VOLUME_STEPS = [0.25, 0.5, 0.75, 1] as const;
+import { Logo } from "./components/Logo";
+import GooeySwitch from "./components/micro-interactions/gooey-switch";
+import { SquigglySlider } from "./components/molecules/squiggly-slider";
+import { SoundPreviewPlayer } from "./components/SoundPreviewPlayer";
+import { fonts, theme } from "./lib/theme";
 
-function SoundButton({ name }: { name: SoundName }) {
-  return (
-    <Pressable style={styles.soundButton} onPress={() => play(name)}>
-      <Text style={styles.soundButtonLabel}>{name}</Text>
-    </Pressable>
-  );
-}
+const SAVE_COLOR = "#2e6cf6";
+const DELETE_COLOR = "#f6462e";
 
 /** Wired through the hook instead of calling `play()` directly — this is what `bind()` covered on the web. */
 function SaveButton() {
   const sound = useCuelumeSound({ toggle: "success" });
   return (
-    <Pressable style={[styles.actionButton, styles.saveButton]} {...sound}>
-      <Text style={styles.actionButtonLabel}>Save</Text>
+    <Pressable
+      style={[styles.actionButton, styles.saveButton]}
+      onPressIn={sound.onPressIn}
+      onPressOut={sound.onPressOut}
+      onPress={() => {
+        sound.onPress();
+        Presets.System.notificationSuccess();
+      }}
+    >
+      <Text style={[styles.actionButtonLabel, styles.saveButtonLabel]}>
+        Save
+      </Text>
     </Pressable>
   );
 }
@@ -34,95 +50,162 @@ function SaveButton() {
 function DeleteButton() {
   const sound = useCuelumeSound({ toggle: "error" });
   return (
-    <Pressable style={[styles.actionButton, styles.deleteButton]} {...sound}>
-      <Text style={styles.actionButtonLabel}>Delete</Text>
+    <Pressable
+      style={[styles.actionButton, styles.deleteButton]}
+      onPressIn={sound.onPressIn}
+      onPressOut={sound.onPressOut}
+      onPress={() => {
+        sound.onPress();
+        Presets.System.notificationError();
+      }}
+    >
+      <Text style={[styles.actionButtonLabel, styles.deleteButtonLabel]}>
+        Delete
+      </Text>
     </Pressable>
   );
 }
 
-export default function App() {
+function AppContent() {
   const [audioEnabled, setAudioEnabled] = useState(true);
-  const [volume, setVolumeState] = useState<(typeof VOLUME_STEPS)[number]>(1);
+  const [volume, setVolumeState] = useState(1);
+  const [sliderWidth, setSliderWidth] = useState(0);
+  const preferenceSound = useCuelumeSound();
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.title}>Cuelume Native</Text>
+        <View style={styles.brand}>
+          <Logo size={32} />
+          <Text style={styles.title}>Cuelume Native</Text>
+        </View>
         <Text style={styles.subtitle}>
-          Seventeen interaction sounds, synthesized live via react-native-audio-api.
+          Seventeen interaction sounds, synthesized live via
+          react-native-audio-api.
         </Text>
 
-        <Text style={styles.sectionTitle}>useCuelumeSound()</Text>
+        <SoundPreviewPlayer />
+
+        <Text style={[styles.sectionTitle, styles.code]}>
+          useCuelumeSound()
+        </Text>
         <View style={styles.row}>
           <SaveButton />
           <DeleteButton />
         </View>
 
-        <Text style={styles.sectionTitle}>play(name)</Text>
-        <View style={styles.grid}>
-          {sounds.map((name) => (
-            <SoundButton key={name} name={name} />
-          ))}
-        </View>
-
         <Text style={styles.sectionTitle}>Preferences</Text>
         <View style={styles.row}>
           <Text style={styles.preferenceLabel}>Enabled</Text>
-          <Switch
-            value={audioEnabled}
-            onValueChange={(value) => {
+          <GooeySwitch
+            active={audioEnabled}
+            onToggle={(value) => {
               setAudioEnabled(value);
               setEnabled(value);
+              preferenceSound.onPress();
+              Presets.System.selection();
             }}
+            size={72}
+            activeColor={theme.accent}
+            inactiveColor={theme.textMuted}
+            trackColor={theme.border}
+            iconTint="#ffffff"
           />
         </View>
+
         <View style={styles.row}>
-          {VOLUME_STEPS.map((step) => (
-            <Pressable
-              key={step}
-              style={[styles.volumeButton, volume === step && styles.volumeButtonActive]}
-              onPress={() => {
-                setVolumeState(step);
-                setVolume(step);
-                play("tick");
+          <Text style={styles.preferenceLabel}>Volume</Text>
+          <Text style={styles.volumeReadout}>{Math.round(volume * 100)}%</Text>
+        </View>
+        <View
+          style={styles.sliderWrapper}
+          onLayout={(event) => setSliderWidth(event.nativeEvent.layout.width)}
+        >
+          {sliderWidth > 0 && (
+            <SquigglySlider
+              value={volume}
+              onValueChange={(value) => {
+                setVolumeState(value);
+                setVolume(value);
               }}
-            >
-              <Text style={styles.volumeButtonLabel}>{Math.round(step * 100)}%</Text>
-            </Pressable>
-          ))}
+              onSlidingComplete={() => {
+                preferenceSound.onPressOut();
+                Presets.System.impactLight();
+              }}
+              width={sliderWidth}
+              activeColor={theme.accent}
+              inactiveColor={theme.border}
+              thumbColor={theme.accent}
+              strokeWidth={4}
+              amplitude={6}
+              speed={3}
+            />
+          )}
         </View>
 
-        <StatusBar style="auto" />
+        <StatusBar style="dark" />
       </ScrollView>
     </SafeAreaView>
   );
 }
 
+export default function App() {
+  const [fontsLoaded] = useFonts({
+    DynaPuff_600SemiBold,
+    DynaPuff_700Bold,
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    NanumGothicCoding_400Regular,
+  });
+
+  if (!fontsLoaded) return <View style={styles.safeArea} />;
+
+  return (
+    <GestureHandlerRootView style={styles.flexFill}>
+      <BottomSheetModalProvider>
+        <SafeAreaProvider>
+          <AppContent />
+        </SafeAreaProvider>
+      </BottomSheetModalProvider>
+    </GestureHandlerRootView>
+  );
+}
+
 const styles = StyleSheet.create({
+  flexFill: {
+    flex: 1,
+  },
   safeArea: {
     flex: 1,
-    backgroundColor: "#0b0b10",
+    backgroundColor: theme.background,
   },
   container: {
     padding: 20,
     gap: 12,
   },
+  brand: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
   title: {
-    fontSize: 28,
-    fontWeight: "700",
-    color: "#fff",
+    fontFamily: fonts.display,
+    fontSize: 26,
+    color: theme.text,
   },
   subtitle: {
+    fontFamily: fonts.body,
     fontSize: 14,
-    color: "#9a9aa6",
+    color: theme.textSecondary,
     marginBottom: 8,
   },
   sectionTitle: {
+    fontFamily: fonts.bodySemiBold,
     fontSize: 13,
-    fontWeight: "600",
     textTransform: "uppercase",
     letterSpacing: 0.5,
-    color: "#6d6d78",
+    color: theme.textMuted,
     marginTop: 16,
   },
   row: {
@@ -130,58 +213,72 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 12,
   },
-  grid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-  },
-  soundButton: {
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 10,
-    backgroundColor: "#1c1c24",
-    borderWidth: 1,
-    borderColor: "#2c2c36",
-  },
-  soundButtonLabel: {
-    color: "#e5e5ea",
-    fontSize: 14,
-  },
   actionButton: {
     flex: 1,
     paddingVertical: 14,
     borderRadius: 12,
     alignItems: "center",
+    borderWidth: 3,
+    borderColor: "#fff",
   },
   saveButton: {
-    backgroundColor: "#2e6cf6",
+    backgroundColor: SAVE_COLOR,
+    boxShadow: [
+      {
+        offsetX: 1,
+        offsetY: 1,
+        blurRadius: 4,
+        color: SAVE_COLOR + "80",
+      },
+    ],
   },
   deleteButton: {
-    backgroundColor: "#f6462e",
+    backgroundColor: DELETE_COLOR,
+    boxShadow: [
+      {
+        offsetX: 1,
+        offsetY: 1,
+        blurRadius: 4,
+        color: DELETE_COLOR + "80",
+      },
+    ],
   },
   actionButtonLabel: {
+    fontFamily: fonts.display,
     color: "#fff",
-    fontWeight: "600",
     fontSize: 15,
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 0,
+  },
+  saveButtonLabel: {
+    textShadowColor: SAVE_COLOR,
+  },
+  deleteButtonLabel: {
+    textShadowColor: DELETE_COLOR,
   },
   preferenceLabel: {
-    color: "#e5e5ea",
+    fontFamily: fonts.body,
+    color: theme.text,
     fontSize: 15,
     flex: 1,
   },
-  volumeButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    backgroundColor: "#1c1c24",
-    borderWidth: 1,
-    borderColor: "#2c2c36",
+  volumeReadout: {
+    fontFamily: fonts.mono,
+    color: theme.textSecondary,
+    fontSize: 14,
   },
-  volumeButtonActive: {
-    borderColor: "#2e6cf6",
+  sliderWrapper: {
+    width: "100%",
   },
-  volumeButtonLabel: {
-    color: "#e5e5ea",
-    fontSize: 13,
+  code: {
+    fontFamily: fonts.mono,
+    padding: 8,
+    backgroundColor: theme.grid,
+    textTransform: "none",
+    color: theme.accent,
+    flexShrink: 1,
+    flexGrow: 0,
+    alignSelf: "flex-start",
+    borderRadius: 4,
   },
 });

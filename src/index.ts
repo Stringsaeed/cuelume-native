@@ -16,6 +16,7 @@
 export type { SoundName } from "./sounds/recipes.js";
 export { sounds } from "./sounds/recipes.js";
 export { play, setEnabled, setVolume } from "./audio/engine.js";
+export { getSoundWaveform, type SoundWaveform } from "./audio/waveform.js";
 export {
   useCuelumeSound,
   type CuelumeSoundHandlers,

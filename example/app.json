@@ -21,7 +21,8 @@
       "permissions": [
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
-      ]
+      ],
+      "package": "com.stringsaeed.example"
     },
     "web": {
       "favicon": "./assets/favicon.png"
