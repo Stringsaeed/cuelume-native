@@ -176,7 +176,7 @@ The same cue bends to how the interaction happened. Cuelume reads this from the 
 | `select` | Which way the selection moved     | A later option rises slightly and an earlier one falls. Custom options count among their marked siblings; a native select uses `selectedIndex`. |
 | `tap`    | What activated it, rapid repeats  | Touch sounds softer and rounder than a mouse click, keyboard activation shorter, a pen crisper. Quick repeats get lighter. |
 | `navigate` | `direction`, from `play()`       | `back` plays the whoosh falling instead of rising. |
-| `toggle`   | Which way it switched              | Switching off plays its glides backwards. Only `bubble`'s toggle glides, so only it changes. |
+| `toggle`   | Which way it switched              | Switching off plays its glides backwards: `default` and `mech` knock upward, `bubble`'s cork sinks. |
 | `count`    | `duration` and `direction`, from `play()` | The roll stretches to the animation; `back` falls. |
 
 Every change is small and bounded, so a cue always sounds like itself. When there's no context, as with a plain `play()` call, the cue plays as normal.
@@ -210,7 +210,7 @@ Context comes from the current event and the timing of recent plays on the same 
 
 ## Themes
 
-Every cue comes in three finished materials. `default` is warm: glass, wood, air, and soft mallets. `mech` is dry and precise: a shutter click, a ratchet detent, a latch, struck metal. `bubble` is playful: bubbles that bloop up as they surface, pop, and fizz. All three have the same fourteen cues, context, and emphasis, and they're level-matched, so switching changes the material, not the volume.
+Every cue comes in three finished materials. `default` is warm: glass, wood, air, and soft mallets. `mech` is dry and precise: a shutter click, a ratchet detent, a latch, struck metal. `bubble` is playful, and every cue is its own gesture: a knock, a drip, a cork, a gulp, a kalimba, a zip. All three have the same fourteen cues, context, and emphasis, and they're level-matched, so switching changes the material, not the volume.
 
 ```ts
 import { play, setTheme } from "cuelume";

@@ -235,7 +235,7 @@ test("every theme carries the same cues, each arranged for every emphasis", asyn
   }
 });
 
-test("every layer keeps the register: nothing above 5 kHz, sines only, and only bubble's tones glide", async () => {
+test("every layer keeps the register: nothing above 5 kHz, sines only, and outside bubble no tone slides", async () => {
   const { THEMES } = await import("../dist/sounds/themes.js");
   for (const [theme, cues] of Object.entries(THEMES)) {
     for (const [cue, recipe] of Object.entries(cues)) {
@@ -246,7 +246,10 @@ test("every layer keeps the register: nothing above 5 kHz, sines only, and only 
         assert.ok(centre <= 5000, `${theme} ${cue}: ${centre} Hz`);
         if (layer.kind === "tone") {
           assert.equal(layer.waveform, "sine", `${theme} ${cue}: ${layer.waveform} tone`);
-          if (theme !== "bubble") assert.equal(layer.glideTo, undefined, `${theme} ${cue}: a tone that glides`);
+          // outside bubble a glide is a knock's body, the pitch drop of a struck surface, never a slide you hear
+          if (theme !== "bubble" && layer.glideTo !== undefined) {
+            assert.ok(layer.glideTo < layer.frequency && (layer.glideTime ?? layer.attack + layer.decay) <= 0.025, `${theme} ${cue}: a tone that slides`);
+          }
         }
       }
     }

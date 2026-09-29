@@ -12,15 +12,15 @@
  * strong plays.
  */
 
-import { COUNT_LANDS, countTicks, type SoundName, type SoundRecipe } from "./recipes.js";
+import { COUNT_LANDS, countTicks, knock, type SoundName, type SoundRecipe } from "./recipes.js";
 
 export const MECH = {
-  /** A machined click, like a camera's shutter button — no ring. */
+  /** A machined click, like a camera's shutter button, over the short knock of its housing. */
   tap: {
-    masterGain: 1.05,
+    masterGain: 0.85,
     layers: [
       { kind: "noise", filterType: "bandpass", filterFrequency: 2650, filterQ: 1.5, attack: 0.001, decay: 0.004, peak: 0.14 },
-      { kind: "noise", filterType: "bandpass", filterFrequency: 910, filterQ: 4, attack: 0.001, decay: 0.012, peak: 0.2 },
+      knock(455, 0.012, 0.02),
       { from: "normal", kind: "noise", filterType: "bandpass", filterFrequency: 4600, filterQ: 2, attack: 0.001, decay: 0.002, peak: 0.05 },
       { from: "strong", kind: "noise", filterType: "bandpass", filterFrequency: 215, filterQ: 2, attack: 0.001, decay: 0.025, peak: 0.3 },
     ],
@@ -37,22 +37,23 @@ export const MECH = {
     ],
     vary: { pitch: 0.05, level: 0.15 },
   },
-  /** A ratchet detent, like a precision dial clicking over one tooth. */
+  /** A ratchet detent: a precision dial clicking over two teeth. */
   select: {
-    masterGain: 0.86,
+    masterGain: 0.84,
     layers: [
       { from: "normal", kind: "noise", filterType: "bandpass", filterFrequency: 3650, filterQ: 3, attack: 0.001, decay: 0.003, peak: 0.2 },
       { kind: "noise", filterType: "bandpass", filterFrequency: 1500, filterQ: 8, attack: 0.001, decay: 0.009, peak: 0.35 },
-      { from: "strong", kind: "noise", filterType: "bandpass", filterFrequency: 1500, filterQ: 8, offset: 0.012, attack: 0.001, decay: 0.006, peak: 0.18 },
+      { kind: "noise", filterType: "bandpass", filterFrequency: 1500, filterQ: 8, offset: 0.012, attack: 0.001, decay: 0.006, peak: 0.18 },
+      knock(250, 0.015, 0.025, { from: "strong", offset: 0.012 }),
     ],
   },
   /** A toggle switch's throw: the lever starts, then snaps over centre. */
   toggle: {
-    masterGain: 0.72,
+    masterGain: 0.6,
     layers: [
       { kind: "noise", filterType: "bandpass", filterFrequency: 1650, filterQ: 2, attack: 0.001, decay: 0.004, peak: 0.14 },
       { kind: "noise", filterType: "bandpass", filterFrequency: 2650, filterQ: 3, offset: 0.03, attack: 0.001, decay: 0.006, peak: 0.18 },
-      { from: "normal", kind: "noise", filterType: "bandpass", filterFrequency: 750, filterQ: 4, offset: 0.03, attack: 0.001, decay: 0.014, peak: 0.2 },
+      knock(375, 0.012, 0.025, { from: "normal", offset: 0.03 }),
       { from: "strong", kind: "noise", filterType: "bandpass", filterFrequency: 250, filterQ: 2, offset: 0.03, attack: 0.001, decay: 0.03, peak: 0.3 },
     ],
   },

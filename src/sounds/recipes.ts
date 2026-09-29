@@ -75,6 +75,20 @@ export const COUNT_TICKS = [0, 0.045, 0.092, 0.142, 0.196, 0.255, 0.32, 0.393, 0
 /** When `count` lands, after its last tick. */
 export const COUNT_LANDS = 0.69;
 
+/** How far sharp a knock is struck, and how fast it drops to its pitch. */
+const KNOCK_DROP = 1.6;
+const KNOCK_DROP_TIME = 0.018;
+
+/**
+ * A knock's body: a sine struck sharp that drops to `frequency` in 18 ms, the
+ * way a small hollow part answers a tap. Heard as a soft "tok", never as a
+ * slide. Measured from the keycap sounds in DawoodUI's Artasaka preview.
+ */
+export const knock = (frequency: number, decay: number, peak: number, more: Partial<ToneLayer> = {}): ToneLayer => ({
+  kind: "tone", waveform: "sine", frequency: frequency * KNOCK_DROP, glideTo: frequency, glideTime: KNOCK_DROP_TIME,
+  attack: 0.001, decay, peak, ...more,
+});
+
 /** `tick` at every COUNT_TICKS offset; every other one is ornament that subtle leaves out. */
 export function countTicks<L extends SoundLayer>(tick: L): L[] {
   return COUNT_TICKS.map((offset, i) => ({ ...tick, offset, ...(i % 2 ? { from: "normal" as const } : {}) }));
@@ -87,24 +101,26 @@ export function countTicks<L extends SoundLayer>(tick: L): L[] {
 // Premium, not playful: clicks and knocks are filtered noise, tones are soft
 // mallets (a sine plus a quiet partial four times its pitch, as on a marimba
 // bar) or glass (sines at the glass-bar ratio 2.76), rooms are short enough
-// to hear as space rather than echo, and no audible tone slides in pitch.
+// to hear as space rather than echo, and no audible tone slides in pitch: a
+// knock's 18 ms drop is heard as the body of a tap, not as a slide.
 // Nothing is centred above 5 kHz, so the palette holds up through a working day.
 export const RECIPES = {
   /**
-   * A small glassy tap — buttons, links, nav. A nail's tick, then the glass
-   * ringing briefly: the fundamental is two near-identical modes that beat
+   * A small glassy tap — buttons, links, nav. A nail's tick, a soft knock of
+   * body, then the glass ringing briefly: the fundamental is two near-identical modes that beat
    * slowly, as real glass shimmers, and the upper mode sits at the glass-bar
    * ratio 2.76x, dying faster than the fundamental.
    */
   tap: {
-    masterGain: 0.42,
+    masterGain: 0.39,
     layers: [
       { from: "normal", kind: "noise", filterType: "bandpass", filterFrequency: 4500, filterQ: 1.2, attack: 0.001, decay: 0.002, peak: 0.03 },
       { kind: "tone", waveform: "sine", frequency: 1174.66, attack: 0.001, decay: 0.128, peak: 0.0135 },
       { kind: "tone", waveform: "sine", frequency: 1180, attack: 0.001, decay: 0.104, peak: 0.008 },
       { kind: "tone", waveform: "sine", frequency: 3242, attack: 0.001, decay: 0.048, peak: 0.0055 },
+      knock(300, 0.02, 0.02, { from: "normal" }),
       { from: "strong", kind: "tone", waveform: "sine", frequency: 587.33, attack: 0.002, decay: 0.16, peak: 0.009 },
-      { from: "strong", kind: "noise", filterType: "bandpass", filterFrequency: 750, filterQ: 1.5, attack: 0.001, decay: 0.015, peak: 0.05 },
+      knock(150, 0.035, 0.014, { from: "strong" }),
     ],
     vary: { pitch: 0.012, level: 0.12 },
   },
@@ -124,22 +140,23 @@ export const RECIPES = {
     ],
     vary: { pitch: 0.07, level: 0.2 },
   },
-  /** A crisp detent with a small woody resonance — dropdowns, menus, lists. */
+  /** A crisp detent over a small wooden knock — dropdowns, menus, lists. */
   select: {
-    masterGain: 0.39,
+    masterGain: 0.35,
     layers: [
       { from: "normal", kind: "noise", filterType: "bandpass", filterFrequency: 2800, filterQ: 2.2, attack: 0.001, decay: 0.008, peak: 0.288 },
-      { kind: "noise", filterType: "bandpass", filterFrequency: 1250, filterQ: 6, attack: 0.001, decay: 0.022, peak: 0.384 },
-      { from: "strong", kind: "noise", filterType: "bandpass", filterFrequency: 580, filterQ: 3, attack: 0.001, decay: 0.02, peak: 0.3 },
+      knock(415, 0.016, 0.03),
+      knock(208, 0.025, 0.025, { from: "strong" }),
     ],
   },
-  /** A two-part click-clack, like a switch flipping between states. */
+  /** A two-part click-clack, like a switch flipping between states; the clack knocks. Switching off knocks upward. */
   toggle: {
-    masterGain: 0.44,
+    masterGain: 0.35,
     layers: [
       { kind: "noise", filterType: "bandpass", filterFrequency: 1830, filterQ: 1.6, attack: 0.001, decay: 0.016, peak: 0.12 },
       { kind: "noise", filterType: "bandpass", filterFrequency: 3150, filterQ: 1.6, offset: 0.024, attack: 0.001, decay: 0.02, peak: 0.1 },
-      { from: "strong", kind: "noise", filterType: "bandpass", filterFrequency: 430, filterQ: 2, offset: 0.024, attack: 0.001, decay: 0.025, peak: 0.2 },
+      knock(330, 0.02, 0.025, { offset: 0.024 }),
+      knock(165, 0.03, 0.025, { from: "strong", offset: 0.024 }),
     ],
   },
   /** Air drawing upward, then a light latch as the panel settles — menus, drawers, dialogs. */
