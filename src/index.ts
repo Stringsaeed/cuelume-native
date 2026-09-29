@@ -5,7 +5,8 @@
  *
  * Imperative:
  *   import { play } from "cuelume-native";
- *   play("droplet");
+ *   play("success");
+ *   play("success", { emphasis: "strong" }); // weightier when it matters
  *
  * Hook:
  *   import { useCuelumeSound } from "cuelume-native";
@@ -14,8 +15,12 @@
  */
 
 export type { SoundName } from "./sounds/recipes.js";
+export type { Emphasis } from "./sounds/context.js";
+export type { PlayOptions } from "./audio/engine.js";
+export type { ThemeName } from "./sounds/themes.js";
+export { themes } from "./sounds/themes.js";
 export { sounds } from "./sounds/recipes.js";
-export { play, setEnabled, setVolume } from "./audio/engine.js";
+export { play, setEnabled, setTheme, setVolume } from "./audio/engine.js";
 export { getSoundWaveform, type SoundWaveform } from "./audio/waveform.js";
 export {
   useCuelumeSound,

@@ -25,7 +25,7 @@ import { CueSheet } from "./CueSheet";
 /** The hero "player" — selected sound's waveform, name, and duration, with buttons to replay it or pick another. */
 export function SoundPreviewPlayer() {
   const sheetRef = useRef<BottomSheetModal>(null);
-  const [selected, setSelected] = useState<SoundName>("chime");
+  const [selected, setSelected] = useState<SoundName>("success");
   const [waveforms, setWaveforms] = useState<
     Partial<Record<SoundName, SoundWaveform>>
   >({});
