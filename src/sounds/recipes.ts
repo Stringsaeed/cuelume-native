@@ -1,8 +1,8 @@
 /**
- * The sound palette — layer/recipe types plus the seventeen built-in recipes.
- * Each sound has its own distinct shape — a chime, an arpeggio, a pitch
- * glide, a warm pad, a breath — rather than being a volume/EQ tweak on
- * the same click. Add a new one here without touching any audio graph code.
+ * The sound palette — layer/recipe types plus the fourteen canonical cues.
+ * Each cue names an interface job, not a synthesis style, and has its own
+ * distinct shape rather than being a volume/EQ tweak on the same click.
+ * Retired v0.2 names live on as aliases until 1.0.
  */
 
 type BaseLayer = {
@@ -14,6 +14,17 @@ type BaseLayer = {
   decay: number;
   /** Peak volume reached at the end of the attack. */
   peak: number;
+  /** If set, the layer's pitch (a tone's frequency, a noise layer's filter) glides to this value. */
+  glideTo?: number;
+  /** How long the glide takes, in seconds. Defaults to attack + decay. */
+  glideTime?: number;
+  /**
+   * The lowest emphasis this layer plays at. Unset plays at every level;
+   * "normal" drops out of subtle; "strong" plays only when strong.
+   */
+  from?: "normal" | "strong";
+  /** For `count`: this layer lasts as long as the count, not only starts in step with it. */
+  stretch?: true;
 };
 
 /** A single note — the building block for chimes, arpeggios, and pads. */
@@ -23,13 +34,9 @@ export type ToneLayer = BaseLayer & {
   frequency: number;
   /** Detune in cents, for a gentle chorus/beating effect between layers. */
   detune?: number;
-  /** If set, the pitch glides smoothly from `frequency` to this value. */
-  glideTo?: number;
-  /** How long the glide takes, in seconds. Defaults to attack + decay. */
-  glideTime?: number;
 };
 
-/** A soft filtered noise bed — used for breathy, textural layers. */
+/** Filtered noise — clicks, knocks, and air. */
 export type NoiseLayer = BaseLayer & {
   kind: "noise";
   filterType: BiquadFilterType;
@@ -47,172 +54,237 @@ export type Shimmer = {
   lowpass: number;
 };
 
+/** Per-play randomness, as fractions: each layer's pitch and level move by up to ± these. */
+export type Variation = {
+  pitch: number;
+  level: number;
+};
+
 export type SoundRecipe = {
   masterGain: number;
   layers: SoundLayer[];
   shimmer?: Shimmer;
+  vary?: Variation;
 };
 
+/**
+ * When `count`'s ticks fall, in seconds, for its 800 ms original: the spacing
+ * widens the way a number eases out. `duration` moves them in proportion.
+ */
+export const COUNT_TICKS = [0, 0.045, 0.092, 0.142, 0.196, 0.255, 0.32, 0.393, 0.476, 0.572];
+/** When `count` lands, after its last tick. */
+export const COUNT_LANDS = 0.69;
+
+/** `tick` at every COUNT_TICKS offset; every other one is ornament that subtle leaves out. */
+export function countTicks<L extends SoundLayer>(tick: L): L[] {
+  return COUNT_TICKS.map((offset, i) => ({ ...tick, offset, ...(i % 2 ? { from: "normal" as const } : {}) }));
+}
+
+// Each cue is arranged for three emphases: layers marked from "normal" are
+// ornament that subtle leaves out, and each cue has one layer of its own that
+// only strong plays.
+//
+// Premium, not playful: clicks and knocks are filtered noise, tones are soft
+// mallets (a sine plus a quiet partial four times its pitch, as on a marimba
+// bar) or glass (sines at the glass-bar ratio 2.76), rooms are short enough
+// to hear as space rather than echo, and no audible tone slides in pitch.
+// Nothing is centred above 5 kHz, so the palette holds up through a working day.
 export const RECIPES = {
-  /** A soft two-note ascending bell, like an iOS/macOS confirmation tink. */
-  chime: {
-    masterGain: 0.5,
+  /**
+   * A small glassy tap — buttons, links, nav. A nail's tick, then the glass
+   * ringing briefly: the fundamental is two near-identical modes that beat
+   * slowly, as real glass shimmers, and the upper mode sits at the glass-bar
+   * ratio 2.76x, dying faster than the fundamental.
+   */
+  tap: {
+    masterGain: 0.42,
     layers: [
-      { kind: "tone", waveform: "sine", frequency: 1046.5, attack: 0.006, decay: 0.22, peak: 0.09 },
-      { kind: "tone", waveform: "sine", frequency: 1568, offset: 0.09, attack: 0.006, decay: 0.26, peak: 0.08 },
+      { from: "normal", kind: "noise", filterType: "bandpass", filterFrequency: 4500, filterQ: 1.2, attack: 0.001, decay: 0.002, peak: 0.03 },
+      { kind: "tone", waveform: "sine", frequency: 1174.66, attack: 0.001, decay: 0.128, peak: 0.0135 },
+      { kind: "tone", waveform: "sine", frequency: 1180, attack: 0.001, decay: 0.104, peak: 0.008 },
+      { kind: "tone", waveform: "sine", frequency: 3242, attack: 0.001, decay: 0.048, peak: 0.0055 },
+      { from: "strong", kind: "tone", waveform: "sine", frequency: 587.33, attack: 0.002, decay: 0.16, peak: 0.009 },
+      { from: "strong", kind: "noise", filterType: "bandpass", filterFrequency: 750, filterQ: 1.5, attack: 0.001, decay: 0.015, peak: 0.05 },
     ],
-    shimmer: { delay: 0.12, feedback: 0.25, wet: 0.18, lowpass: 4000 },
+    vary: { pitch: 0.012, level: 0.12 },
   },
-  /** A quick ascending twinkle of four notes — bright and playful. */
-  sparkle: {
-    masterGain: 0.5,
+  /**
+   * One keyboard keystroke — the switch's click, the keycap's clack, the thock
+   * of bottoming out, and a faint return as the key springs back. Every stroke
+   * lands at a slightly different pitch and weight, like different keys.
+   */
+  type: {
+    masterGain: 0.37,
     layers: [
-      { kind: "tone", waveform: "sine", frequency: 1760, offset: 0, attack: 0.003, decay: 0.09, peak: 0.045 },
-      { kind: "tone", waveform: "sine", frequency: 2217, offset: 0.045, attack: 0.003, decay: 0.09, peak: 0.04 },
-      { kind: "tone", waveform: "sine", frequency: 2637, offset: 0.09, attack: 0.003, decay: 0.1, peak: 0.038 },
-      { kind: "tone", waveform: "sine", frequency: 3520, offset: 0.135, attack: 0.003, decay: 0.12, peak: 0.032 },
+      { kind: "noise", filterType: "bandpass", filterFrequency: 3900, filterQ: 0.8, attack: 0.001, decay: 0.005, peak: 0.08 },
+      { from: "normal", kind: "noise", filterType: "bandpass", filterFrequency: 1550, filterQ: 3.5, attack: 0.001, decay: 0.016, peak: 0.22 },
+      { kind: "noise", filterType: "bandpass", filterFrequency: 310, filterQ: 2.5, attack: 0.002, decay: 0.03, peak: 0.35 },
+      { from: "normal", kind: "noise", filterType: "bandpass", filterFrequency: 2000, filterQ: 3, offset: 0.06, attack: 0.001, decay: 0.01, peak: 0.07 },
+      { from: "strong", kind: "noise", filterType: "bandpass", filterFrequency: 140, filterQ: 2, attack: 0.002, decay: 0.045, peak: 0.45 },
     ],
-    shimmer: { delay: 0.07, feedback: 0.35, wet: 0.22, lowpass: 6000 },
+    vary: { pitch: 0.07, level: 0.2 },
   },
-  /** A single note gliding smoothly downward, like a drop of water. */
-  droplet: {
-    masterGain: 0.55,
+  /** A crisp detent with a small woody resonance — dropdowns, menus, lists. */
+  select: {
+    masterGain: 0.39,
     layers: [
-      { kind: "tone", waveform: "sine", frequency: 1200, glideTo: 550, glideTime: 0.14, attack: 0.004, decay: 0.2, peak: 0.075 },
-    ],
-    shimmer: { delay: 0.09, feedback: 0.2, wet: 0.15, lowpass: 3000 },
-  },
-  /** A warm, slow-swelling pad from two gently detuned sines. */
-  bloom: {
-    masterGain: 0.5,
-    layers: [
-      { kind: "tone", waveform: "sine", frequency: 528, attack: 0.06, decay: 0.32, peak: 0.06 },
-      { kind: "tone", waveform: "sine", frequency: 528, detune: 12, attack: 0.06, decay: 0.34, peak: 0.05 },
-    ],
-    shimmer: { delay: 0.15, feedback: 0.2, wet: 0.12, lowpass: 2500 },
-  },
-  /** A soft hush with a falling tone — for tooltips and low-priority previews. */
-  whisper: {
-    masterGain: 0.48,
-    layers: [
-      { kind: "noise", filterType: "lowpass", filterFrequency: 1600, filterQ: 0.7, attack: 0.025, decay: 0.13, peak: 0.04 },
-      { kind: "tone", waveform: "sine", frequency: 880, glideTo: 660, glideTime: 0.14, offset: 0.01, attack: 0.012, decay: 0.14, peak: 0.025 },
+      { from: "normal", kind: "noise", filterType: "bandpass", filterFrequency: 2800, filterQ: 2.2, attack: 0.001, decay: 0.008, peak: 0.288 },
+      { kind: "noise", filterType: "bandpass", filterFrequency: 1250, filterQ: 6, attack: 0.001, decay: 0.022, peak: 0.384 },
+      { from: "strong", kind: "noise", filterType: "bandpass", filterFrequency: 580, filterQ: 3, attack: 0.001, decay: 0.02, peak: 0.3 },
     ],
   },
-  /** A focused, bandpass-filtered tick with a bright sine ping on top — crisp and instant. */
-  tick: {
-    masterGain: 0.4,
-    layers: [
-      { kind: "noise", filterType: "bandpass", filterFrequency: 5400, filterQ: 1.8, attack: 0.001, decay: 0.018, peak: 0.14 },
-      { kind: "tone", waveform: "sine", frequency: 2600, attack: 0.001, decay: 0.012, peak: 0.018 },
-    ],
-  },
-  /** A dull, muted knock — the "down" half of a press/release pair, like a key bottoming out. */
-  press: {
-    masterGain: 0.4,
-    layers: [
-      { kind: "noise", filterType: "bandpass", filterFrequency: 1700, filterQ: 1.4, attack: 0.001, decay: 0.02, peak: 0.13 },
-    ],
-  },
-  /** A brighter, springier tick — the "up" half of a press/release pair, like a key returning. */
-  release: {
-    masterGain: 0.4,
-    layers: [
-      { kind: "noise", filterType: "bandpass", filterFrequency: 4600, filterQ: 1.8, attack: 0.001, decay: 0.016, peak: 0.12 },
-      { kind: "tone", waveform: "sine", frequency: 3200, offset: 0.006, attack: 0.001, decay: 0.05, peak: 0.02 },
-    ],
-  },
-  /** A two-part click-clack, like a mechanical switch flipping between states. */
+  /** A two-part click-clack, like a switch flipping between states. */
   toggle: {
-    masterGain: 0.4,
-    layers: [
-      { kind: "noise", filterType: "bandpass", filterFrequency: 2200, filterQ: 1.6, attack: 0.001, decay: 0.016, peak: 0.12 },
-      { kind: "noise", filterType: "bandpass", filterFrequency: 3800, filterQ: 1.6, offset: 0.024, attack: 0.001, decay: 0.02, peak: 0.1 },
-    ],
-  },
-  /** A short, warm three-note ascending confirmation — "done", not a fanfare. */
-  success: {
-    masterGain: 0.5,
-    layers: [
-      { kind: "tone", waveform: "sine", frequency: 880, attack: 0.004, decay: 0.09, peak: 0.06 },
-      { kind: "tone", waveform: "sine", frequency: 1108.73, offset: 0.06, attack: 0.004, decay: 0.1, peak: 0.06 },
-      { kind: "tone", waveform: "sine", frequency: 1318.51, offset: 0.12, attack: 0.004, decay: 0.18, peak: 0.07 },
-    ],
-    shimmer: { delay: 0.1, feedback: 0.22, wet: 0.16, lowpass: 4500 },
-  },
-  /** A muted knock followed by two descending tones — a calm, recoverable refusal. */
-  error: {
-    masterGain: 0.42,
-    layers: [
-      { kind: "noise", filterType: "bandpass", filterFrequency: 850, filterQ: 1.1, attack: 0.001, decay: 0.035, peak: 0.13 },
-      { kind: "tone", waveform: "triangle", frequency: 440, offset: 0.025, attack: 0.004, decay: 0.09, peak: 0.045 },
-      { kind: "tone", waveform: "triangle", frequency: 349.23, offset: 0.1, attack: 0.004, decay: 0.14, peak: 0.04 },
-    ],
-  },
-  /** A papery filtered flick with a tiny glass tick — for pages, galleries, and carousels. */
-  page: {
-    masterGain: 0.38,
-    layers: [
-      { kind: "noise", filterType: "lowpass", filterFrequency: 1800, filterQ: 0.7, attack: 0.006, decay: 0.08, peak: 0.11 },
-      { kind: "noise", filterType: "bandpass", filterFrequency: 4200, filterQ: 1.2, offset: 0.04, attack: 0.004, decay: 0.065, peak: 0.08 },
-      { kind: "tone", waveform: "sine", frequency: 2400, offset: 0.075, attack: 0.002, decay: 0.045, peak: 0.02 },
-    ],
-  },
-  /** A brief unresolved lift — signals that user-initiated work has started. */
-  loading: {
-    masterGain: 0.42,
-    layers: [
-      { kind: "noise", filterType: "lowpass", filterFrequency: 1400, filterQ: 0.6, attack: 0.035, decay: 0.14, peak: 0.035 },
-      { kind: "tone", waveform: "sine", frequency: 420, glideTo: 630, glideTime: 0.18, attack: 0.025, decay: 0.18, peak: 0.05 },
-    ],
-    shimmer: { delay: 0.11, feedback: 0.18, wet: 0.12, lowpass: 2800 },
-  },
-  /** A quick lock-on sweep resolving to a clear tone — the system is ready. */
-  ready: {
-    masterGain: 0.48,
-    layers: [
-      { kind: "noise", filterType: "bandpass", filterFrequency: 3600, filterQ: 1.8, attack: 0.001, decay: 0.02, peak: 0.11 },
-      { kind: "tone", waveform: "triangle", frequency: 330, glideTo: 660, glideTime: 0.12, offset: 0.012, attack: 0.004, decay: 0.16, peak: 0.055 },
-      { kind: "tone", waveform: "sine", frequency: 990, offset: 0.13, attack: 0.004, decay: 0.22, peak: 0.06 },
-    ],
-    shimmer: { delay: 0.1, feedback: 0.16, wet: 0.1, lowpass: 4200 },
-  },
-  /** A compact synthetic chirp — crisp feedback for primary buttons and controls. */
-  pulse: {
-    masterGain: 0.42,
-    layers: [
-      { kind: "noise", filterType: "bandpass", filterFrequency: 2600, filterQ: 2.4, attack: 0.001, decay: 0.022, peak: 0.08 },
-      { kind: "tone", waveform: "triangle", frequency: 620, glideTo: 1240, glideTime: 0.07, attack: 0.002, decay: 0.085, peak: 0.055 },
-    ],
-  },
-  /** A fast three-step locator signal — playful feedback for menus and secondary buttons. */
-  scan: {
-    masterGain: 0.4,
-    layers: [
-      { kind: "tone", waveform: "sine", frequency: 740, attack: 0.002, decay: 0.055, peak: 0.05 },
-      { kind: "tone", waveform: "sine", frequency: 1110, offset: 0.045, attack: 0.002, decay: 0.055, peak: 0.045 },
-      { kind: "tone", waveform: "sine", frequency: 1665, offset: 0.09, attack: 0.002, decay: 0.07, peak: 0.04 },
-    ],
-    shimmer: { delay: 0.065, feedback: 0.16, wet: 0.1, lowpass: 4200 },
-  },
-  /** A rising harmonic portal with a soft tail — for client-side page arrivals. */
-  arrival: {
     masterGain: 0.44,
     layers: [
-      { kind: "noise", filterType: "lowpass", filterFrequency: 900, filterQ: 0.8, attack: 0.05, decay: 0.24, peak: 0.035 },
-      { kind: "tone", waveform: "sine", frequency: 220, glideTo: 440, glideTime: 0.32, attack: 0.04, decay: 0.34, peak: 0.055 },
-      { kind: "tone", waveform: "sine", frequency: 659.25, offset: 0.12, attack: 0.045, decay: 0.32, peak: 0.04 },
-      { kind: "tone", waveform: "sine", frequency: 987.77, offset: 0.19, attack: 0.045, decay: 0.34, peak: 0.032 },
+      { kind: "noise", filterType: "bandpass", filterFrequency: 1830, filterQ: 1.6, attack: 0.001, decay: 0.016, peak: 0.12 },
+      { kind: "noise", filterType: "bandpass", filterFrequency: 3150, filterQ: 1.6, offset: 0.024, attack: 0.001, decay: 0.02, peak: 0.1 },
+      { from: "strong", kind: "noise", filterType: "bandpass", filterFrequency: 430, filterQ: 2, offset: 0.024, attack: 0.001, decay: 0.025, peak: 0.2 },
     ],
-    shimmer: { delay: 0.16, feedback: 0.28, wet: 0.18, lowpass: 3200 },
   },
-} as const satisfies Record<string, SoundRecipe>;
+  /** Air drawing upward, then a light latch as the panel settles — menus, drawers, dialogs. */
+  open: {
+    masterGain: 0.53,
+    layers: [
+      { kind: "noise", filterType: "bandpass", filterFrequency: 600, glideTo: 1500, glideTime: 0.1, filterQ: 1.4, attack: 0.07, decay: 0.04, peak: 0.168 },
+      { from: "normal", kind: "noise", filterType: "bandpass", filterFrequency: 2150, filterQ: 3, offset: 0.095, attack: 0.001, decay: 0.012, peak: 0.12 },
+      { from: "normal", kind: "noise", filterType: "bandpass", filterFrequency: 515, filterQ: 2, offset: 0.095, attack: 0.001, decay: 0.02, peak: 0.096 },
+      { from: "strong", kind: "noise", filterType: "bandpass", filterFrequency: 250, filterQ: 2, offset: 0.095, attack: 0.001, decay: 0.04, peak: 0.2 },
+    ],
+  },
+  /** The same air falling, into a soft thud as it shuts — closing and dismissing. */
+  close: {
+    masterGain: 0.48,
+    layers: [
+      { kind: "noise", filterType: "bandpass", filterFrequency: 1400, glideTo: 540, glideTime: 0.07, filterQ: 1.4, attack: 0.04, decay: 0.035, peak: 0.216 },
+      { kind: "noise", filterType: "bandpass", filterFrequency: 350, filterQ: 2, offset: 0.07, attack: 0.001, decay: 0.03, peak: 0.36 },
+      { from: "normal", kind: "noise", filterType: "bandpass", filterFrequency: 1650, filterQ: 2.5, offset: 0.07, attack: 0.001, decay: 0.006, peak: 0.09 },
+      { from: "strong", kind: "noise", filterType: "bandpass", filterFrequency: 165, filterQ: 2, offset: 0.07, attack: 0.001, decay: 0.04, peak: 0.3 },
+    ],
+  },
+  /** Two soft mallet notes rising a fifth, C5 to G5, in a small room — confirmed completion. */
+  success: {
+    masterGain: 0.54,
+    layers: [
+      { kind: "tone", waveform: "sine", frequency: 523.25, attack: 0.003, decay: 0.21, peak: 0.034 },
+      { from: "normal", kind: "tone", waveform: "sine", frequency: 2093, attack: 0.001, decay: 0.04, peak: 0.007 },
+      { kind: "tone", waveform: "sine", frequency: 783.99, offset: 0.075, attack: 0.003, decay: 0.27, peak: 0.036 },
+      { from: "normal", kind: "tone", waveform: "sine", frequency: 3136, offset: 0.075, attack: 0.001, decay: 0.04, peak: 0.007 },
+      { from: "strong", kind: "tone", waveform: "sine", frequency: 392, offset: 0.075, attack: 0.01, decay: 0.36, peak: 0.022 },
+    ],
+    shimmer: { delay: 0.035, feedback: 0.2, wet: 0.1, lowpass: 3200 },
+  },
+  /** Two muted mallet notes falling a minor third, low and short — a calm, recoverable refusal. */
+  error: {
+    masterGain: 0.46,
+    layers: [
+      { kind: "tone", waveform: "sine", frequency: 349.23, attack: 0.003, decay: 0.096, peak: 0.046 },
+      { from: "normal", kind: "tone", waveform: "sine", frequency: 1396.91, attack: 0.001, decay: 0.025, peak: 0.007 },
+      { kind: "tone", waveform: "sine", frequency: 293.66, offset: 0.11, attack: 0.003, decay: 0.144, peak: 0.046 },
+      { from: "normal", kind: "tone", waveform: "sine", frequency: 1174.66, offset: 0.11, attack: 0.001, decay: 0.025, peak: 0.007 },
+      { from: "strong", kind: "noise", filterType: "bandpass", filterFrequency: 250, filterQ: 1.5, attack: 0.001, decay: 0.03, peak: 0.2 },
+    ],
+  },
+  /** A soft whoosh whose air rises as it passes — routes, pages, galleries, carousels. */
+  navigate: {
+    masterGain: 0.41,
+    layers: [
+      { kind: "noise", filterType: "bandpass", filterFrequency: 400, glideTo: 1800, glideTime: 0.21, filterQ: 1.2, attack: 0.12, decay: 0.12, peak: 0.18 },
+      { from: "normal", kind: "noise", filterType: "lowpass", filterFrequency: 540, filterQ: 0.7, attack: 0.09, decay: 0.096, peak: 0.045 },
+      { from: "strong", kind: "noise", filterType: "lowpass", filterFrequency: 230, filterQ: 0.7, attack: 0.1, decay: 0.144, peak: 0.1 },
+    ],
+  },
+  /** One mallet note struck twice at one pitch. Success rises and error falls; warning stays level. */
+  warning: {
+    masterGain: 0.54,
+    layers: [
+      { kind: "tone", waveform: "sine", frequency: 440, attack: 0.003, decay: 0.1, peak: 0.044 },
+      { from: "normal", kind: "tone", waveform: "sine", frequency: 1760, attack: 0.001, decay: 0.025, peak: 0.007 },
+      { kind: "tone", waveform: "sine", frequency: 440, offset: 0.1, attack: 0.003, decay: 0.14, peak: 0.04 },
+      { from: "normal", kind: "tone", waveform: "sine", frequency: 1760, offset: 0.1, attack: 0.001, decay: 0.025, peak: 0.006 },
+      { from: "strong", kind: "tone", waveform: "sine", frequency: 220, offset: 0.1, attack: 0.005, decay: 0.2, peak: 0.02 },
+    ],
+  },
+  /** One muted note that swells in and is never struck, over a breath of air: work has begun, nothing has landed. */
+  loading: {
+    masterGain: 0.36,
+    layers: [
+      { kind: "tone", waveform: "sine", frequency: 392, attack: 0.09, decay: 0.16, peak: 0.03 },
+      { from: "normal", kind: "noise", filterType: "lowpass", filterFrequency: 900, filterQ: 0.7, attack: 0.08, decay: 0.1, peak: 0.05 },
+      { from: "strong", kind: "tone", waveform: "sine", frequency: 196, attack: 0.1, decay: 0.2, peak: 0.02 },
+    ],
+  },
+  /** One glass note, lower and longer than tap, in success's small room: a result is there. */
+  ready: {
+    masterGain: 0.55,
+    layers: [
+      { kind: "tone", waveform: "sine", frequency: 783.99, attack: 0.004, decay: 0.34, peak: 0.022 },
+      { kind: "tone", waveform: "sine", frequency: 788.5, attack: 0.004, decay: 0.28, peak: 0.012 },
+      { from: "normal", kind: "tone", waveform: "sine", frequency: 2163.8, attack: 0.002, decay: 0.09, peak: 0.005 },
+      { from: "strong", kind: "tone", waveform: "sine", frequency: 392, attack: 0.006, decay: 0.4, peak: 0.014 },
+    ],
+    shimmer: { delay: 0.035, feedback: 0.2, wet: 0.1, lowpass: 3200 },
+  },
+  /** Two glass notes rising a fourth, spaced like a call: blocked until the user answers. */
+  attention: {
+    masterGain: 0.64,
+    layers: [
+      { kind: "tone", waveform: "sine", frequency: 880, attack: 0.003, decay: 0.22, peak: 0.02 },
+      { kind: "tone", waveform: "sine", frequency: 885.1, attack: 0.003, decay: 0.18, peak: 0.011 },
+      { from: "normal", kind: "tone", waveform: "sine", frequency: 2428.8, attack: 0.002, decay: 0.06, peak: 0.005 },
+      { kind: "tone", waveform: "sine", frequency: 1174.66, offset: 0.16, attack: 0.003, decay: 0.3, peak: 0.02 },
+      { kind: "tone", waveform: "sine", frequency: 1181.5, offset: 0.16, attack: 0.003, decay: 0.24, peak: 0.011 },
+      { from: "normal", kind: "tone", waveform: "sine", frequency: 3242, offset: 0.16, attack: 0.002, decay: 0.07, peak: 0.005 },
+      { from: "strong", kind: "tone", waveform: "sine", frequency: 587.33, offset: 0.16, attack: 0.006, decay: 0.36, peak: 0.012 },
+    ],
+  },
+  /**
+   * A number rolling to a new value: soft wooden ticks, like a fine dial, that
+   * slow as the number eases out, over a breath of air that rises with the count
+   * (and falls counting down), landing on a quiet glass note.
+   */
+  count: {
+    masterGain: 0.27,
+    layers: [
+      ...countTicks({ kind: "noise", filterType: "bandpass", filterFrequency: 2300, filterQ: 4, attack: 0.001, decay: 0.006, peak: 0.14 }),
+      { stretch: true, kind: "noise", filterType: "bandpass", filterFrequency: 700, glideTo: 1400, glideTime: 0.6, filterQ: 1.2, attack: 0.15, decay: 0.55, peak: 0.05 },
+      { kind: "tone", waveform: "sine", frequency: 1046.5, offset: COUNT_LANDS, attack: 0.002, decay: 0.12, peak: 0.02 },
+      { kind: "tone", waveform: "sine", frequency: 1051.2, offset: COUNT_LANDS, attack: 0.002, decay: 0.1, peak: 0.011 },
+      { from: "normal", kind: "tone", waveform: "sine", frequency: 2888.3, offset: COUNT_LANDS, attack: 0.001, decay: 0.04, peak: 0.005 },
+      { from: "strong", kind: "tone", waveform: "sine", frequency: 261.63, offset: COUNT_LANDS, attack: 0.004, decay: 0.16, peak: 0.02 },
+    ],
+    vary: { pitch: 0.02, level: 0.12 },
+  },
+} satisfies Record<string, SoundRecipe>;
 
 export type SoundName = keyof typeof RECIPES;
 
-export function isSoundName(value: unknown): value is SoundName {
-  return typeof value === "string" && Object.prototype.hasOwnProperty.call(RECIPES, value);
-}
-
-/** All available sound names, derived from the recipe palette. */
+/** All canonical cue names, derived from the recipe palette. */
 export const sounds = Object.keys(RECIPES) as readonly SoundName[];
+
+/** The v0.2 palette, mapped to the cue that now does each job. Removed in 1.0. */
+const ALIASES = {
+  chime: "success",
+  sparkle: "success",
+  droplet: "close",
+  bloom: "open",
+  whisper: "select",
+  tick: "select",
+  press: "tap",
+  release: "tap",
+  page: "navigate",
+  pulse: "tap",
+  scan: "select",
+  arrival: "navigate",
+} as const satisfies Record<string, SoundName>;
+
+export type LegacySoundName = keyof typeof ALIASES;
+
+const own = (object: object, key: string) => Object.prototype.hasOwnProperty.call(object, key);
+
+/** Maps a canonical or deprecated name to its canonical cue; anything else is `null`. */
+export function resolveSound(value: unknown): SoundName | null {
+  if (typeof value !== "string") return null;
+  if (own(RECIPES, value)) return value as SoundName;
+  return own(ALIASES, value) ? ALIASES[value as LegacySoundName] : null;
+}

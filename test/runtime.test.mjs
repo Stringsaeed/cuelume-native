@@ -18,8 +18,16 @@ function restoreGlobals() {
 
 const audioParam = () => ({
   value: 0,
-  setValueAtTime() {},
-  exponentialRampToValueAtTime() {},
+  ramps: [],
+  rampTimes: [],
+  setValueAtTime(value, time) {
+    this.value = value;
+    this.setAt = time;
+  },
+  exponentialRampToValueAtTime(value, time) {
+    this.ramps.push(value);
+    this.rampTimes.push(time);
+  },
 });
 
 function compressor(node) {
@@ -32,11 +40,354 @@ function compressor(node) {
   });
 }
 
-test("expanded palette exposes sci-fi interaction and arrival cues", async () => {
+// A Web Audio stand-in that records when each source starts and stops, and every pitch that glides.
+function recordingContext() {
+  const log = { sources: [], pitched: [], delays: [] };
+  class Node {
+    connect(destination) {
+      return destination;
+    }
+    disconnect() {}
+  }
+  const source = (extra) => {
+    const node = Object.assign(new Node(), extra, {
+      start(at) {
+        node.at = at;
+      },
+      stop(at) {
+        node.end = at;
+      },
+    });
+    log.sources.push(node);
+    return node;
+  };
+  class Context {
+    state = "running";
+    currentTime = 0;
+    sampleRate = 1;
+    destination = new Node();
+    createGain() {
+      return Object.assign(new Node(), { gain: audioParam() });
+    }
+    createDynamicsCompressor() {
+      return compressor(new Node());
+    }
+    createDelay() {
+      return Object.assign(new Node(), { delayTime: audioParam() });
+    }
+    createBuffer() {
+      return { getChannelData: () => new Float32Array(1) };
+    }
+    createOscillator() {
+      const frequency = audioParam();
+      log.pitched.push(frequency);
+      return source({ frequency, detune: audioParam() });
+    }
+    createBufferSource() {
+      return source({ buffer: null });
+    }
+    createBiquadFilter() {
+      const frequency = audioParam();
+      log.pitched.push(frequency);
+      return Object.assign(new Node(), { frequency, Q: audioParam() });
+    }
+  }
+  return { Context, log };
+}
+
+const CANONICAL = [
+  "tap", "type", "select", "toggle", "open", "close", "success", "error", "navigate",
+  "warning", "loading", "ready", "attention", "count",
+];
+
+test("palette is the fourteen canonical cues, the original nine first", async () => {
   const { setVolume, sounds } = await import("../dist/index.js");
-  assert.equal(sounds.length, 17);
-  assert.deepEqual(sounds.slice(-3), ["pulse", "scan", "arrival"]);
+  assert.deepEqual(sounds, CANONICAL);
   assert.equal(typeof setVolume, "function");
+});
+
+test("deprecated names resolve to their documented canonical cue", async () => {
+  const { resolveSound } = await import("../dist/sounds/recipes.js");
+  const migration = {
+    chime: "success",
+    sparkle: "success",
+    droplet: "close",
+    bloom: "open",
+    whisper: "select",
+    tick: "select",
+    press: "tap",
+    release: "tap",
+    toggle: "toggle",
+    success: "success",
+    error: "error",
+    page: "navigate",
+    loading: "loading",
+    ready: "ready",
+    pulse: "tap",
+    scan: "select",
+    arrival: "navigate",
+  };
+  for (const [name, cue] of Object.entries(migration)) assert.equal(resolveSound(name), cue, name);
+  for (const cue of CANONICAL) assert.equal(resolveSound(cue), cue);
+  for (const invalid of ["toString", "__proto__", "", null, 1]) assert.equal(resolveSound(invalid), null);
+});
+
+test("context shapes cues within bounds and leaves missing context canonical", async () => {
+  const { shapeFor, layerFactors, resolveEmphasis, arrangement, contextFrom } = await import("../dist/sounds/context.js");
+  const { RECIPES } = await import("../dist/sounds/recipes.js");
+  const { THEMES } = await import("../dist/sounds/themes.js");
+  const identity = { pitch: 1, level: 1, length: 1, bright: 1, tail: 1, sweep: 1, time: 1 };
+  const SLOW = 10_000;
+
+  for (const cue of CANONICAL) assert.deepEqual(shapeFor(cue, {}, "normal", SLOW), identity, cue);
+  // cues that don't listen for a context ignore it
+  assert.deepEqual(shapeFor("success", { key: "enter", input: "touch", direction: 1, duration: 1600 }, "normal", 10), identity);
+
+  assert.equal(resolveEmphasis("strong"), "strong");
+  for (const invalid of ["loud", "toString", undefined, 2]) assert.equal(resolveEmphasis(invalid), "normal");
+  // each emphasis is its own arrangement: strong adds a layer, subtle strips ornament
+  let simpler = 0;
+  for (const cue of CANONICAL) {
+    const [few, base, more] = ["subtle", "normal", "strong"].map((e) => arrangement(RECIPES[cue].layers, e));
+    assert.equal(base.length, RECIPES[cue].layers.filter((l) => l.from !== "strong").length, cue);
+    assert.ok(more.length > base.length && few.length <= base.length, cue);
+    if (few.length < base.length) simpler++;
+  }
+  assert.ok(simpler >= CANONICAL.length - 1); // toggle has no ornament to strip
+
+  const [subtle, normal, strong] = ["subtle", "normal", "strong"].map((e) => shapeFor("success", {}, e, SLOW));
+  assert.ok(subtle.level < normal.level && normal.level < strong.level);
+  assert.ok(subtle.length < normal.length && normal.length < strong.length);
+  assert.ok(subtle.bright < normal.bright && normal.bright < strong.bright);
+
+  // type: cadence lightens and drops the key return; key roles order by size
+  const fast = shapeFor("type", {}, "normal", 50);
+  assert.ok(fast.level < 1 && fast.length < 1 && fast.tail < 0.5);
+  assert.ok(shapeFor("type", {}, "normal", 150).tail > fast.tail);
+  const pitch = (key) => shapeFor("type", { key }, "normal", SLOW).pitch;
+  assert.ok(pitch("enter") < pitch("space") && pitch("space") < pitch("delete") && pitch("delete") < pitch("printable"));
+
+  // select: direction; tap: input method
+  assert.ok(shapeFor("select", { direction: 1 }, "normal", SLOW).pitch > 1);
+  assert.ok(shapeFor("select", { direction: -1 }, "normal", SLOW).pitch < 1);
+  assert.ok(shapeFor("tap", { input: "touch" }, "normal", SLOW).bright < 1);
+  assert.ok(shapeFor("tap", { input: "keyboard" }, "normal", SLOW).pitch < 1);
+  // count: duration scales time against its 800 ms original
+  assert.equal(shapeFor("count", { duration: 1600 }, "normal", SLOW).time, 2);
+  assert.equal(shapeFor("count", { duration: 400 }, "strong", SLOW).time, 0.5);
+
+  // every context, emphasis, and cadence stays bounded on every layer
+  const contexts = [{}, { key: "enter" }, { key: "space" }, { key: "delete" }, { input: "touch" }, { input: "pen" },
+    { input: "keyboard" }, { direction: 1 }, { direction: -1 }, { duration: 300 }, { duration: 2000 }];
+  for (const cue of CANONICAL) {
+    for (const context of contexts) {
+      for (const emphasis of ["subtle", "normal", "strong"]) {
+        for (const since of [0, 60, 120, SLOW]) {
+          for (const layer of Object.values(THEMES).flatMap((theme) => theme[cue].layers)) {
+            const f = layerFactors(layer, shapeFor(cue, context, emphasis, since));
+            assert.ok(f.pitch >= 0.75 && f.pitch <= 1.25 && f.gain >= 0 && f.gain <= 1.5);
+            assert.ok(f.length >= 0.6 && f.length <= 1.6);
+          }
+        }
+      }
+    }
+  }
+
+  // play() options map onto the same context bindings produce; junk is dropped
+  assert.deepEqual(contextFrom({ direction: "back", key: "delete", input: "pen" }), { direction: -1, key: "delete", input: "pen" });
+  assert.deepEqual(contextFrom({ direction: "forward" }), { direction: 1 });
+  // duration: finite numbers clamp to 300–2000 ms
+  assert.deepEqual(contextFrom({ duration: 900 }), { duration: 900 });
+  assert.deepEqual(contextFrom({ duration: 100 }), { duration: 300 });
+  assert.deepEqual(contextFrom({ duration: 0 }), { duration: 300 });
+  assert.deepEqual(contextFrom({ duration: 5000 }), { duration: 2000 });
+  for (const junk of [undefined, null, {}, { direction: "up", key: "toString", input: 3 }, { direction: 1 }, { direction: "BACK" },
+    { duration: "900" }, { duration: Number.NaN }, { duration: Infinity }]) {
+    assert.deepEqual(contextFrom(junk), {}, JSON.stringify(junk));
+  }
+  // navigate, toggle and count going back play their glides reversed; nothing else does
+  for (const cue of ["navigate", "toggle", "count"]) {
+    assert.equal(shapeFor(cue, { direction: -1 }, "normal", SLOW).sweep, -1, cue);
+    assert.equal(shapeFor(cue, { direction: 1 }, "normal", SLOW).sweep, 1, cue);
+  }
+  assert.equal(shapeFor("select", { direction: -1 }, "normal", SLOW).sweep, 1);
+});
+
+test("every theme carries the same cues, each arranged for every emphasis", async () => {
+  const { themes, sounds } = await import("../dist/index.js");
+  const { THEMES } = await import("../dist/sounds/themes.js");
+  const { arrangement } = await import("../dist/sounds/context.js");
+  assert.deepEqual(themes, ["default", "mech", "bubble"]);
+  for (const theme of themes) {
+    assert.deepEqual(Object.keys(THEMES[theme]), [...sounds], theme);
+    for (const cue of sounds) {
+      const layers = THEMES[theme][cue].layers;
+      const [few, base, more] = ["subtle", "normal", "strong"].map((e) => arrangement(layers, e));
+      assert.ok(few.length >= 1 && few.length <= base.length && more.length > base.length, `${theme} ${cue}`);
+    }
+  }
+  // each theme is its own material, not another renamed
+  for (const cue of sounds) {
+    const [base, mech, bubble] = ["default", "mech", "bubble"].map((theme) => THEMES[theme][cue].layers);
+    assert.notDeepEqual(mech, base, cue);
+    assert.notDeepEqual(bubble, base, cue);
+    assert.notDeepEqual(bubble, mech, cue);
+  }
+});
+
+test("every layer keeps the register: nothing above 5 kHz, sines only, and only bubble's tones glide", async () => {
+  const { THEMES } = await import("../dist/sounds/themes.js");
+  for (const [theme, cues] of Object.entries(THEMES)) {
+    for (const [cue, recipe] of Object.entries(cues)) {
+      // a room is for results that land
+      if (recipe.shimmer) assert.ok(cue === "success" || cue === "ready", `${theme} ${cue} has a room`);
+      for (const layer of recipe.layers) {
+        const centre = Math.max(layer.kind === "tone" ? layer.frequency : layer.filterFrequency, layer.glideTo ?? 0);
+        assert.ok(centre <= 5000, `${theme} ${cue}: ${centre} Hz`);
+        if (layer.kind === "tone") {
+          assert.equal(layer.waveform, "sine", `${theme} ${cue}: ${layer.waveform} tone`);
+          if (theme !== "bubble") assert.equal(layer.glideTo, undefined, `${theme} ${cue}: a tone that glides`);
+        }
+      }
+    }
+  }
+  // bubble is made of bloops: every cue has a tone that glides
+  for (const [cue, recipe] of Object.entries(THEMES.bubble)) {
+    assert.ok(recipe.layers.some((layer) => layer.kind === "tone" && layer.glideTo !== undefined), `bubble ${cue} has a bloop`);
+  }
+});
+
+test("outcome cues keep their contour in every theme", async () => {
+  const { THEMES } = await import("../dist/sounds/themes.js");
+  // the lowest core layer (no emphasis tag) at each onset, in time order
+  const onsets = (recipe) => {
+    const byOffset = new Map();
+    for (const layer of recipe.layers) {
+      if (layer.from) continue;
+      const hz = layer.kind === "tone" ? layer.frequency : layer.filterFrequency;
+      const at = layer.offset ?? 0;
+      byOffset.set(at, Math.min(hz, byOffset.get(at) ?? Infinity));
+    }
+    return [...byOffset].sort(([a], [b]) => a - b).map(([, hz]) => hz);
+  };
+  for (const [theme, cues] of Object.entries(THEMES)) {
+    const [s1, s2] = onsets(cues.success);
+    const [e1, e2] = onsets(cues.error);
+    const [w1, w2] = onsets(cues.warning);
+    const [a1, a2] = onsets(cues.attention);
+    assert.ok(s2 > s1, `${theme} success rises`);
+    assert.ok(e2 < e1, `${theme} error falls`);
+    assert.equal(w2, w1, `${theme} warning stays level`);
+    assert.ok(a2 > a1, `${theme} attention rises`);
+    assert.equal(onsets(cues.ready).length, 1, `${theme} ready is one note`);
+    // randomness never blurs a contour: warning's notes stay one pitch, and select's ±5% direction outweighs its jitter
+    assert.equal(cues.warning.vary?.pitch ?? 0, 0, `${theme} warning's notes stay one pitch`);
+    assert.ok((cues.select.vary?.pitch ?? 0) < 0.05, `${theme} select's direction outweighs its randomness`);
+  }
+});
+
+test("count follows its duration and falls going back, in every theme and emphasis", async (context) => {
+  context.after(restoreGlobals);
+  const { Context, log } = recordingContext();
+  setGlobal("setTimeout", (callback, delay) => {
+    log.delays.push(delay);
+    return 0;
+  });
+  setGlobal("window", { AudioContext: Context });
+  const { play, setTheme } = await import(`../dist/audio/engine.js?count=${Date.now()}`);
+  const { THEMES } = await import("../dist/sounds/themes.js");
+  const { arrangement } = await import("../dist/sounds/context.js");
+
+  const played = (cue, options) => {
+    const [sources, pitched] = [log.sources.length, log.pitched.length];
+    play(cue, options);
+    return { sources: log.sources.slice(sources), pitched: log.pitched.slice(pitched) };
+  };
+  const starts = (options, cue = "count") => played(cue, options).sources.map((source) => source.at);
+  const glides = (cue, options) =>
+    played(cue, options).pitched.filter((param) => param.ramps.length > 0).map((param) => param.ramps[0] - param.value);
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+
+  for (const theme of Object.keys(THEMES)) {
+    setTheme(theme);
+    // duration moves every layer's start in proportion; only stretch layers change length
+    const layers = arrangement(THEMES[theme].count.layers, "normal");
+    const [short, long] = [300, 2000].map((duration) => played("count", { duration }));
+    assert.equal(short.sources.length, layers.length, theme);
+    layers.forEach((layer, i) => {
+      const offset = layer.offset ?? 0;
+      const [s, l] = [short.sources[i], long.sources[i]];
+      assert.ok(near(s.at, (offset * 300) / 800) && near(l.at, (offset * 2000) / 800), `${theme} layer ${i} starts in step`);
+      // a stretch layer's sound and glide both last in proportion; everything else keeps its length
+      const scale = layer.stretch ? 2000 / 300 : 1;
+      assert.ok(near(l.end - l.at - 0.05, (s.end - s.at - 0.05) * scale), `${theme} layer ${i} length`);
+      // one pitched param per layer, in layer order: a filter for noise, an oscillator for a tone
+      const [sp, lp] = [short.pitched[i], long.pitched[i]];
+      if (layer.glideTo !== undefined) {
+        assert.ok(near(lp.rampTimes[0] - lp.setAt, (sp.rampTimes[0] - sp.setAt) * scale), `${theme} layer ${i} glide time`);
+      }
+    });
+    // clamped to 300–2000 ms; anything that isn't a finite number plays the 800 ms original
+    assert.deepEqual(starts({ duration: 100 }), starts({ duration: 300 }), theme);
+    assert.deepEqual(starts({ duration: -5 }), starts({ duration: 300 }), theme);
+    assert.deepEqual(starts({ duration: 60_000 }), starts({ duration: 2000 }), theme);
+    for (const junk of ["900", Number.NaN, Infinity, null, undefined]) {
+      assert.deepEqual(starts({ duration: junk }), starts(), `${theme} ${junk}`);
+    }
+    // other cues ignore it
+    assert.deepEqual(starts({ duration: 2000 }, "success"), starts({}, "success"), theme);
+    // the graph stays up until a stretched roll has landed and rung out
+    play("count", { duration: 2000 });
+    const lands = Math.max(...layers.map((layer) => layer.offset ?? 0)) * 2.5 * 1000;
+    assert.ok(log.delays.at(-1) > lands + 50, `${theme} cleanup`);
+
+    // going back plays every glide reversed, so counting down falls, at every emphasis
+    for (const emphasis of ["subtle", "normal", "strong"]) {
+      const [up, down] = [glides("count", { emphasis }), glides("count", { emphasis, direction: "back" })];
+      assert.ok(up.length > 0 && up.every((d) => d > 0), `${theme} ${emphasis} count rises`);
+      assert.ok(down.length === up.length && down.every((d) => d < 0), `${theme} ${emphasis} count falls going back`);
+    }
+  }
+  // bubble's toggle and navigate glide too, so going back sinks them
+  setTheme("bubble");
+  for (const cue of ["toggle", "navigate"]) {
+    const [up, down] = [glides(cue, {}), glides(cue, { direction: "back" })];
+    assert.ok(up.length > 0 && up.every((d) => d > 0), `bubble ${cue} rises`);
+    assert.ok(down.length === up.length && down.every((d) => d < 0), `bubble ${cue} sinks going back`);
+  }
+  setTheme("default");
+});
+
+test("a per-play theme plays that theme once and leaves the active one", async (context) => {
+  context.after(restoreGlobals);
+  const { Context, log } = recordingContext();
+  setGlobal("setTimeout", () => 0);
+  setGlobal("window", { AudioContext: Context });
+  const { play, setTheme } = await import(`../dist/audio/engine.js?theme=${Date.now()}`);
+  const { THEMES } = await import("../dist/sounds/themes.js");
+
+  // tap's first layer tells the themes apart: a noise tick in default and mech, a bloop in bubble
+  const firstPitch = (options) => {
+    const before = log.pitched.length;
+    play("tap", options);
+    return log.pitched[before].value;
+  };
+  const is = (theme, value) => {
+    const { layers, vary } = THEMES[theme].tap;
+    const base = layers[0].kind === "tone" ? layers[0].frequency : layers[0].filterFrequency;
+    return Math.abs(value / base - 1) <= (vary?.pitch ?? 0) + 1e-9;
+  };
+
+  assert.ok(is("default", firstPitch()));
+  assert.ok(is("bubble", firstPitch({ theme: "bubble" })));
+  assert.ok(is("default", firstPitch()), "the override lasts one play");
+  setTheme("mech");
+  assert.ok(is("default", firstPitch({ theme: "default" })));
+  for (const junk of ["glass", "toString", "__proto__", "Bubble", 1, null]) {
+    assert.ok(is("mech", firstPitch({ theme: junk })), String(junk));
+  }
+  assert.ok(is("mech", firstPitch()));
+  setTheme("default");
 });
 
 test("play waits for user activation before creating AudioContext", async (context) => {
@@ -55,11 +406,11 @@ test("play waits for user activation before creating AudioContext", async (conte
   setGlobal("window", { AudioContext: ThrowingContext });
   const { play } = await import(`../dist/audio/engine.js?activation=${Date.now()}`);
 
-  play("chime");
+  play("tap");
   assert.equal(constructions, 0);
 
   userActivation.hasBeenActive = true;
-  play("chime");
+  play("tap");
   assert.equal(constructions, 1);
 });
 
@@ -80,10 +431,10 @@ test("invalid names and AudioContext failures are silent", async (context) => {
   assert.doesNotThrow(() => play("toString"));
   assert.equal(constructions, 0);
   setEnabled(false);
-  assert.doesNotThrow(() => play("chime"));
+  assert.doesNotThrow(() => play("tap"));
   assert.equal(constructions, 0);
   setEnabled(true);
-  assert.doesNotThrow(() => play("chime"));
+  assert.doesNotThrow(() => play("tap"));
   assert.equal(constructions, 1);
 
   let renders = 0;
@@ -99,7 +450,7 @@ test("invalid names and AudioContext failures are silent", async (context) => {
 
   setGlobal("window", { AudioContext: RejectedContext });
   const rejected = await import(`../dist/audio/engine.js?rejected=${Date.now()}`);
-  assert.doesNotThrow(() => rejected.play("chime"));
+  assert.doesNotThrow(() => rejected.play("tap"));
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(renders, 0);
 
@@ -123,7 +474,7 @@ test("invalid names and AudioContext failures are silent", async (context) => {
 
   setGlobal("window", { AudioContext: DeferredContext });
   const deferred = await import(`../dist/audio/engine.js?deferred=${Date.now()}`);
-  deferred.play("chime");
+  deferred.play("tap");
   deferred.setEnabled(false);
   finishResume();
   await new Promise((resolve) => setImmediate(resolve));
@@ -163,6 +514,14 @@ test("volume is clamped and one boosted output bus is reused", async (context) =
       compressors.push(node);
       return node;
     }
+    createOscillator() {
+      return Object.assign(new AudioNodeStub("oscillator"), {
+        frequency: audioParam(),
+        detune: audioParam(),
+        start() {},
+        stop() {},
+      });
+    }
     createBuffer() {
       return { getChannelData: () => new Float32Array(1) };
     }
@@ -185,24 +544,25 @@ test("volume is clamped and one boosted output bus is reused", async (context) =
   setGlobal("window", { AudioContext: VolumeContext });
 
   const { play, setVolume } = await import(`../dist/audio/engine.js?volume=${Date.now()}`);
+  const { RECIPES } = await import("../dist/sounds/recipes.js");
 
   setVolume(2);
-  play("press", { volume: 0.5 });
+  play("tap", { volume: 0.5 });
   setVolume(0.5);
-  play("press", { volume: 0.5 });
-  play("press", { volume: 2 });
-  play("press", { volume: Number.NaN });
+  play("tap", { volume: 0.5 });
+  play("tap", { volume: 2 });
+  play("tap", { volume: Number.NaN });
   setVolume(-1);
   setVolume(Number.NaN);
   setVolume(Number.POSITIVE_INFINITY);
-  play("press");
+  play("tap");
 
   const output = gains[0];
   const masters = gains.slice(1).filter((gain) => gain.connections.includes(output));
 
   assert.deepEqual(
     masters.map(({ gain }) => gain.value),
-    [0.2, 0.1, 0.2, 0.2],
+    [0.5, 0.25, 0.5, 0.5].map((volume) => RECIPES.tap.masterGain * volume),
   );
   assert.ok(output.gain.value > 1);
   assert.equal(compressors.length, 1);
@@ -211,9 +571,11 @@ test("volume is clamped and one boosted output bus is reused", async (context) =
   assert.equal(compressors[0].connections[0].name, "destination");
 });
 
-test("binding is delegated, dynamic, idempotent, and globally throttled", async (context) => {
+test("every cue renders, deprecated names play, and every keystroke varies within bounds", async (context) => {
   context.after(restoreGlobals);
-  const counts = { buffers: 0, oscillators: 0 };
+  let renders = 0;
+  const filters = [];
+  const delays = [];
 
   class AudioNodeStub {
     connect(destination) {
@@ -237,21 +599,203 @@ test("binding is delegated, dynamic, idempotent, and globally throttled", async 
       return Object.assign(new AudioNodeStub(), {
         frequency: audioParam(),
         detune: audioParam(),
-        start() {
-          counts.oscillators++;
-        },
+        start() {},
         stop() {},
       });
     }
     createBuffer() {
-      counts.buffers++;
       return { getChannelData: () => new Float32Array(1) };
     }
     createBufferSource() {
       return Object.assign(new AudioNodeStub(), { buffer: null, start() {}, stop() {} });
     }
     createBiquadFilter() {
-      return Object.assign(new AudioNodeStub(), { frequency: audioParam(), Q: audioParam() });
+      const filter = Object.assign(new AudioNodeStub(), { frequency: audioParam(), Q: audioParam() });
+      filters.push(filter);
+      return filter;
+    }
+    createDelay() {
+      return Object.assign(new AudioNodeStub(), { delayTime: audioParam() });
+    }
+  }
+
+  setGlobal("setTimeout", (callback, delay) => {
+    renders++;
+    delays.push(delay);
+    return 0;
+  });
+  setGlobal("window", { AudioContext: WorkingContext });
+  const { play, setTheme } = await import(`../dist/audio/engine.js?palette=${Date.now()}`);
+
+  for (const cue of CANONICAL) play(cue);
+  assert.equal(renders, CANONICAL.length);
+  for (const cue of CANONICAL) {
+    for (const emphasis of ["subtle", "normal", "strong", "loud"]) play(cue, { emphasis });
+  }
+  assert.equal(renders, CANONICAL.length * 5);
+  // emphasis is heard as length too, so a strong cue rings longer than a subtle one
+  const ring = (emphasis) => {
+    play("success", { emphasis });
+    return delays.at(-1);
+  };
+  assert.ok(ring("subtle") < ring("normal") && ring("normal") < ring("strong"));
+  assert.equal(ring("loud"), ring("normal"));
+  renders = 0;
+  play("chime");
+  play();
+  assert.equal(renders, 2);
+
+  // setTheme changes the material of future plays; unknown names change nothing
+  const firstFilterOf = (cue) => {
+    const before = filters.length;
+    play(cue);
+    return filters[before].frequency.value;
+  };
+  const { THEMES } = await import("../dist/sounds/themes.js");
+  const near = (value, base, bound) => Math.abs(value / base - 1) <= bound + 1e-9;
+  const mechTap = THEMES.mech.tap;
+  assert.ok(near(firstFilterOf("tap"), THEMES.default.tap.layers[0].filterFrequency, THEMES.default.tap.vary.pitch));
+  setTheme("mech");
+  assert.ok(near(firstFilterOf("tap"), mechTap.layers[0].filterFrequency, mechTap.vary?.pitch ?? 0));
+  setTheme("glass");
+  setTheme(undefined);
+  assert.ok(near(firstFilterOf("tap"), mechTap.layers[0].filterFrequency, mechTap.vary?.pitch ?? 0));
+  const before = renders;
+  for (const cue of CANONICAL) {
+    for (const emphasis of ["subtle", "normal", "strong"]) play(cue, { emphasis });
+  }
+  assert.equal(renders - before, CANONICAL.length * 3);
+  setTheme("default");
+  assert.ok(near(firstFilterOf("tap"), THEMES.default.tap.layers[0].filterFrequency, THEMES.default.tap.vary.pitch));
+
+  // type's first layer is the switch click; its filter shows each stroke's pitch.
+  const { RECIPES } = await import("../dist/sounds/recipes.js");
+  const base = RECIPES.type.layers[0].filterFrequency;
+  const bound = RECIPES.type.vary.pitch;
+  const clicks = [];
+  for (let i = 0; i < 200; i++) {
+    const before = filters.length;
+    play("type");
+    clicks.push(filters[before].frequency.value / base - 1);
+  }
+  for (let i = 1; i < clicks.length; i++) assert.notEqual(clicks[i], clicks[i - 1]);
+  assert.ok(clicks.every((offset) => Math.abs(offset) <= bound));
+  assert.ok(Math.max(...clicks) > bound / 2 && Math.min(...clicks) < -bound / 2);
+
+  // Variation is opt-in: a cue without it plays the recipe exactly.
+  for (let i = 0; i < 3; i++) {
+    const before = filters.length;
+    play("select");
+    assert.equal(filters[before].frequency.value, RECIPES.select.layers[0].filterFrequency);
+  }
+
+  // navigate's whoosh sweeps its noise filter; tap's filters stay put.
+  const sweeps = (cue) => {
+    const before = filters.length;
+    play(cue);
+    return filters.slice(before).filter((filter) => filter.frequency.ramps.length > 0).length;
+  };
+  assert.ok(sweeps("navigate") > 0);
+  assert.equal(sweeps("tap"), 0);
+
+  // play() takes the context bindings detect
+  const { shapeFor } = await import("../dist/sounds/context.js");
+  const SLOW = 10_000;
+  const played = (cue, options) => {
+    const before = filters.length;
+    play(cue, options);
+    return filters.slice(before);
+  };
+  const detent = RECIPES.select.layers[0].filterFrequency;
+  const ratioOf = (options) => played("select", options)[0].frequency.value / detent;
+  assert.ok(Math.abs(ratioOf({ direction: "forward" }) - 1.05) < 1e-9);
+  assert.ok(Math.abs(ratioOf({ direction: "back" }) - 0.95) < 1e-9);
+  // unknown values, and fields a cue doesn't listen to, leave it canonical
+  for (const options of [{ direction: "up" }, { direction: 1 }, { direction: "BACK" }, { key: "enter" }, { input: "pen" }, null]) {
+    assert.equal(ratioOf(options), 1, JSON.stringify(options));
+  }
+  const within = (cue, layer, context) => {
+    const expected = shapeFor(cue, context, "normal", SLOW).pitch;
+    const bound = RECIPES[cue].vary.pitch;
+    for (let i = 0; i < 20; i++) {
+      const ratio = played(cue, context)[0].frequency.value / RECIPES[cue].layers[layer].filterFrequency;
+      assert.ok(Math.abs(ratio / expected - 1) <= bound + 1e-9, `${cue} ${JSON.stringify(context)}`);
+    }
+  };
+  within("type", 0, { key: "enter" });
+  within("tap", 0, { input: "keyboard" });
+
+  // navigate: back plays the sweep falling, in both themes and at every emphasis
+  const sweepOf = (options) => {
+    const filter = played("navigate", options).find((f) => f.frequency.ramps.length > 0);
+    return filter.frequency.ramps[0] - filter.frequency.value;
+  };
+  assert.ok(sweepOf() > 0 && sweepOf({ direction: "forward" }) > 0);
+  for (const theme of ["default", "mech"]) {
+    setTheme(theme);
+    for (const emphasis of ["subtle", "normal", "strong"]) {
+      assert.ok(sweepOf({ direction: "back", emphasis }) < 0, `${theme} ${emphasis}`);
+    }
+  }
+  setTheme("default");
+});
+
+test("binding is delegated, dynamic, idempotent, and plays one cue per action", async (context) => {
+  context.after(restoreGlobals);
+  const { RECIPES } = await import("../dist/sounds/recipes.js");
+  const gainOf = (cue) => RECIPES[cue].masterGain;
+  // Cues are identified by master gain below, so the ones asserted on must differ.
+  const identified = ["tap", "type", "select", "open", "success", "loading", "ready"];
+  assert.equal(new Set(identified.map(gainOf)).size, identified.length);
+
+  const masters = [];
+  const filters = [];
+  const oscillators = [];
+  const delays = [];
+  let renders = 0;
+
+  class AudioNodeStub {
+    connect(destination) {
+      return destination;
+    }
+    disconnect() {}
+  }
+
+  class WorkingContext {
+    state = "running";
+    currentTime = 0;
+    sampleRate = 1;
+    destination = new AudioNodeStub();
+    createGain() {
+      const gain = Object.assign(new AudioNodeStub(), { gain: audioParam() });
+      // The first gain of each render is its master.
+      if (masters.length === renders) masters.push(gain);
+      return gain;
+    }
+    createDynamicsCompressor() {
+      masters.pop(); // the gain just created was the shared output bus, not a master
+      return compressor(new AudioNodeStub());
+    }
+    createOscillator() {
+      const frequency = audioParam();
+      oscillators.push(frequency);
+      return Object.assign(new AudioNodeStub(), {
+        frequency,
+        detune: audioParam(),
+        start() {},
+        stop() {},
+      });
+    }
+    createBuffer() {
+      return { getChannelData: () => new Float32Array(1) };
+    }
+    createBufferSource() {
+      return Object.assign(new AudioNodeStub(), { buffer: null, start() {}, stop() {} });
+    }
+    createBiquadFilter() {
+      const filter = Object.assign(new AudioNodeStub(), { frequency: audioParam(), Q: audioParam() });
+      filters.push(filter);
+      return filter;
     }
     createDelay() {
       return Object.assign(new AudioNodeStub(), { delayTime: audioParam() });
@@ -259,9 +803,13 @@ test("binding is delegated, dynamic, idempotent, and globally throttled", async 
   }
 
   class FakeElement {
-    constructor(parent = null) {
+    constructor(parent = null, tagName = "DIV", attributes = {}) {
       this.parent = parent;
-      this.attributes = new Map();
+      this.parentElement = parent;
+      this.children = [];
+      parent?.children.push(this);
+      this.tagName = tagName;
+      this.attributes = new Map(Object.entries(attributes));
       this.listeners = new Map();
     }
     addEventListener(type, listener) {
@@ -270,7 +818,7 @@ test("binding is delegated, dynamic, idempotent, and globally throttled", async 
       this.listeners.set(type, listeners);
     }
     emit(type, target = this, options = {}) {
-      const event = { target, relatedTarget: null, pointerType: "mouse", ...options };
+      const event = { target, relatedTarget: null, pointerType: "mouse", key: "a", ...options };
       for (const listener of this.listeners.get(type) ?? []) listener(event);
     }
     setAttribute(name, value = "") {
@@ -286,9 +834,9 @@ test("binding is delegated, dynamic, idempotent, and globally throttled", async 
       return this.attributes.has(name);
     }
     closest(selector) {
-      const attribute = selector.slice(1, -1);
+      const names = selector.split(",").map((part) => part.slice(1, -1));
       for (let element = this; element; element = element.parent) {
-        if (element.hasAttribute(attribute)) return element;
+        if (names.some((name) => element.hasAttribute(name))) return element;
       }
       return null;
     }
@@ -305,7 +853,11 @@ test("binding is delegated, dynamic, idempotent, and globally throttled", async 
   setGlobal("Node", FakeElement);
   setGlobal("document", {});
   setGlobal("performance", { now: () => now });
-  setGlobal("setTimeout", () => 0);
+  setGlobal("setTimeout", (callback, delay) => {
+    renders++;
+    delays.push(delay);
+    return 0;
+  });
   setGlobal("window", {
     AudioContext: WorkingContext,
     matchMedia: () => ({ matches: true }),
@@ -313,54 +865,241 @@ test("binding is delegated, dynamic, idempotent, and globally throttled", async 
 
   const root = new FakeElement();
   const { bind } = await import(`../dist/interactions/bind.js?binding=${Date.now()}`);
+  const { setEnabled } = await import("../dist/audio/engine.js");
   bind(root);
   bind(root);
-  assert.equal(root.listeners.get("pointerenter").length, 1);
-  assert.equal(root.listeners.get("pointerdown").length, 1);
-  assert.equal(root.listeners.get("pointerup").length, 1);
-  assert.equal(root.listeners.get("click").length, 1);
+  for (const type of ["click", "change", "keydown", "pointerenter", "pointerdown", "pointerup"]) {
+    assert.equal(root.listeners.get(type).length, 1, type);
+  }
 
-  const first = new FakeElement(root);
-  first.setAttribute("data-cuelume-hover", "whisper");
-  root.emit("pointerenter", first);
-  assert.equal(counts.buffers, 1);
+  // Asserts how many cues `action` played, and returns the last one's master gain.
+  const played = (count, action) => {
+    const before = renders;
+    action();
+    assert.equal(renders - before, count);
+    return masters.at(-1).gain.value;
+  };
 
-  const later = new FakeElement(root);
-  later.setAttribute("data-cuelume-hover", "whisper");
+  // tap: click, explicit values, deprecated values, invalid values, removal.
+  const button = new FakeElement(root, "BUTTON", { "data-cuelume-tap": "" });
+  assert.equal(played(1, () => root.emit("click", button)), gainOf("tap"));
+  button.setAttribute("data-cuelume-tap", "open");
+  assert.equal(played(1, () => root.emit("click", button)), gainOf("open"));
+  button.setAttribute("data-cuelume-tap", "chime");
+  assert.equal(played(1, () => root.emit("click", button)), gainOf("success"));
+  // 0.2's loading and ready are cues again, not stand-ins
+  button.setAttribute("data-cuelume-tap", "loading");
+  assert.equal(played(1, () => root.emit("click", button)), gainOf("loading"));
+  button.setAttribute("data-cuelume-tap", "ready");
+  assert.equal(played(1, () => root.emit("click", button)), gainOf("ready"));
+  button.setAttribute("data-cuelume-tap", "toString");
+  assert.equal(played(1, () => root.emit("click", button)), gainOf("tap"));
+  button.removeAttribute("data-cuelume-tap");
+  played(0, () => root.emit("click", button));
+
+  // Every click binding is live, and the innermost annotated element decides.
+  for (const cue of ["toggle", "close", "navigate"]) {
+    played(1, () => root.emit("click", new FakeElement(root, "BUTTON", { [`data-cuelume-${cue}`]: "" })));
+  }
+  const card = new FakeElement(root, "DIV", { "data-cuelume-tap": "" });
+  const opener = new FakeElement(card, "BUTTON", { "data-cuelume-open": "" });
+  assert.equal(played(1, () => root.emit("click", new FakeElement(opener, "SPAN"))), gainOf("open"));
+
+  // select: a native control plays on change only; a custom option on click.
+  const native = new FakeElement(root, "SELECT", { "data-cuelume-select": "" });
+  played(0, () => root.emit("click", native));
+  assert.equal(played(1, () => root.emit("change", native)), gainOf("select"));
+  const option = new FakeElement(root, "LI", { "data-cuelume-select": "" });
+  assert.equal(played(1, () => root.emit("click", option)), gainOf("select"));
+  played(0, () => root.emit("change", new FakeElement(root, "SELECT")));
+
+  // type: printable and editing keys only, rate limited.
+  const input = new FakeElement(root, "INPUT", { "data-cuelume-type": "" });
+  const key = (count, options, target = input) => {
+    now += 100;
+    played(count, () => root.emit("keydown", target, options));
+  };
+  assert.equal(played(1, () => root.emit("keydown", input)), gainOf("type"));
+  now += 10;
+  played(0, () => root.emit("keydown", input));
+  for (const options of [
+    { key: "Shift" },
+    { key: "ArrowLeft" },
+    { key: "Tab" },
+    { key: "a", repeat: true },
+    { key: "a", isComposing: true },
+    { key: "Process", keyCode: 229 },
+    { key: "c", metaKey: true },
+    { key: "c", ctrlKey: true },
+    { key: "Enter" },
+  ]) {
+    key(0, options);
+  }
+  for (const options of [{ key: " " }, { key: "Backspace" }, { key: "Delete" }, { key: "@", ctrlKey: true, altKey: true }]) {
+    key(1, options);
+  }
+  key(1, { key: "Enter" }, new FakeElement(root, "TEXTAREA", { "data-cuelume-type": "" }));
+
+  // Held Backspace or Delete keeps sounding while it deletes, and stops when nothing is left.
+  const line = Object.assign(new FakeElement(root, "INPUT", { "data-cuelume-type": "" }), {
+    value: "hello",
+    selectionStart: 5,
+    selectionEnd: 5,
+  });
+  key(1, { key: "Backspace" }, line);
+  key(1, { key: "Backspace", repeat: true }, line);
+  now += 30; // a fast key repeat is still held to the typing rate limit
+  played(0, () => root.emit("keydown", line, { key: "Backspace", repeat: true }));
+  key(1, { key: "Backspace", metaKey: true }, line); // delete to line start
+  key(1, { key: "Backspace", altKey: true }, line); // delete word
+  key(0, { key: "Delete", repeat: true }, line); // caret at the end: nothing ahead to delete
+  line.selectionStart = line.selectionEnd = 0;
+  key(0, { key: "Backspace", repeat: true }, line); // caret at the start: nothing behind
+  key(1, { key: "Delete", repeat: true }, line);
+  line.selectionEnd = 3;
+  key(1, { key: "Backspace" }, line); // a selection always deletes
+  line.value = "";
+  line.selectionEnd = 0;
+  key(0, { key: "Backspace" }, line);
+  key(0, {}, Object.assign(new FakeElement(root, "INPUT", { "data-cuelume-type": "" }), { type: "password" }));
+  key(0, {}, new FakeElement(root, "INPUT"));
+  const form = new FakeElement(root, "FORM", { "data-cuelume-type": "" });
+  key(0, { key: "Enter" }, new FakeElement(form, "BUTTON"));
+
+  // Deprecated hover: fine mouse only, throttled, silent inside itself, defaults to select.
+  const link = new FakeElement(root, "A", { "data-cuelume-hover": "" });
+  now += 1_000;
+  assert.equal(played(1, () => root.emit("pointerenter", link)), gainOf("select"));
   now += 100;
-  root.emit("pointerenter", later);
-  assert.equal(counts.buffers, 1);
-
+  played(0, () => root.emit("pointerenter", link));
   now += 51;
-  root.emit("pointerenter", later);
-  assert.equal(counts.buffers, 2);
-
-  later.setAttribute("data-cuelume-toggle", "whisper");
-  root.emit("click", later, { pointerType: undefined });
-  assert.equal(counts.buffers, 3);
-  later.removeAttribute("data-cuelume-toggle");
-  root.emit("click", later, { pointerType: undefined });
-  assert.equal(counts.buffers, 3);
-
-  const touchTarget = new FakeElement(root);
-  touchTarget.setAttribute("data-cuelume-press", "whisper");
-  touchTarget.setAttribute("data-cuelume-release", "whisper");
-  root.emit("pointerdown", touchTarget, { pointerType: "touch" });
-  root.emit("pointerup", touchTarget, { pointerType: "touch" });
-  assert.equal(counts.buffers, 5);
-
-  const invalid = new FakeElement(root);
-  invalid.setAttribute("data-cuelume-hover", "toString");
-  const oscillatorsBeforeInvalid = counts.oscillators;
+  played(1, () => root.emit("pointerenter", link));
   now += 151;
-  root.emit("pointerenter", invalid);
-  assert.equal(counts.oscillators, oscillatorsBeforeInvalid + 2);
+  played(0, () => root.emit("pointerenter", new FakeElement(link), { relatedTarget: link }));
+  played(0, () => root.emit("pointerenter", link, { pointerType: "touch" }));
 
-  const child = new FakeElement(later);
-  now += 151;
-  root.emit("pointerenter", child, { relatedTarget: later });
-  assert.equal(counts.buffers, 5);
+  // Deprecated press/release: a pair plays one tap, on press; release alone still plays.
+  const pair = new FakeElement(root, "BUTTON", { "data-cuelume-press": "", "data-cuelume-release": "" });
+  assert.equal(played(1, () => root.emit("pointerdown", pair, { pointerType: "touch" })), gainOf("tap"));
+  played(0, () => root.emit("pointerup", pair, { pointerType: "touch" }));
+  const releaseOnly = new FakeElement(root, "BUTTON", { "data-cuelume-release": "" });
+  played(1, () => root.emit("pointerup", releaseOnly));
 
+  // setEnabled(false) silences delegated playback too.
+  setEnabled(false);
+  played(0, () => root.emit("click", opener));
+  setEnabled(true);
+  played(1, () => root.emit("click", opener));
+
+  // ---- context: each binding hands the engine what it knows about the interaction ----
+  const firstFilter = (action) => {
+    const before = filters.length;
+    action();
+    return filters[before].frequency.value;
+  };
+
+  // type: Enter in a textarea is a bigger, lower key than a letter
+  const pad = new FakeElement(root, "TEXTAREA", { "data-cuelume-type": "" });
+  const clickHz = RECIPES.type.layers[0].filterFrequency;
+  now += 1_000;
+  const letter = firstFilter(() => root.emit("keydown", pad, { key: "a" }));
+  now += 1_000;
+  const enter = firstFilter(() => root.emit("keydown", pad, { key: "Enter" }));
+  assert.ok(letter > clickHz * 0.9 && enter < clickHz * 0.86);
+
+  // select: the first pick in a group reads the previous choice from ARIA state
+  const range = new FakeElement(root, "DIV");
+  const [, week, month] = ["false", "true", "false"].map((checked) =>
+    new FakeElement(range, "BUTTON", { "data-cuelume-select": "", "aria-checked": checked }));
+  now += 1_000;
+  assert.ok(firstFilter(() => root.emit("click", month)) > RECIPES.select.layers[0].filterFrequency);
+
+  // select: among marked siblings a later pick rises and an earlier one falls; with no state, the first has no direction
+  const days = new FakeElement(root, "DIV");
+  const [mon, tue, wed] = [0, 1, 2].map(() => new FakeElement(days, "BUTTON", { "data-cuelume-select": "" }));
+  const detentHz = RECIPES.select.layers[0].filterFrequency;
+  now += 1_000;
+  assert.equal(firstFilter(() => root.emit("click", mon)), detentHz);
+  now += 1_000;
+  assert.ok(firstFilter(() => root.emit("click", wed)) > detentHz);
+  now += 1_000;
+  assert.ok(firstFilter(() => root.emit("click", tue)) < detentHz);
+  // a native select moves by selectedIndex
+  const picker = Object.assign(new FakeElement(root, "SELECT", { "data-cuelume-select": "" }), { selectedIndex: 1 });
+  now += 1_000;
+  assert.equal(firstFilter(() => root.emit("change", picker)), detentHz);
+  picker.selectedIndex = 3;
+  now += 1_000;
+  assert.ok(firstFilter(() => root.emit("change", picker)) > detentHz);
+
+  // tap: touch and keyboard activation sound rounder and lower than a mouse click
+  const glassHz = RECIPES.tap.layers[0].filterFrequency;
+  const glass = new FakeElement(root, "BUTTON", { "data-cuelume-tap": "" });
+  now += 1_000;
+  const mouse = firstFilter(() => root.emit("click", glass));
+  now += 1_000;
+  const touch = firstFilter(() => root.emit("click", glass, { pointerType: "touch" }));
+  now += 1_000;
+  const keyboard = firstFilter(() => root.emit("click", glass, { pointerType: "", detail: 0 }));
+  assert.ok(mouse > glassHz * 0.985 && touch < glassHz * 0.985 && keyboard < glassHz * 0.96);
+
+  // data-cuelume-emphasis weights the cue, set on the element or any ancestor
+  const ringOf = (action) => {
+    action();
+    return delays.at(-1);
+  };
+  now += 1_000;
+  const plain = ringOf(() => root.emit("click", glass));
+  const toolbar = new FakeElement(root, "DIV", { "data-cuelume-emphasis": "strong" });
+  const publish = new FakeElement(toolbar, "BUTTON", { "data-cuelume-tap": "" });
+  now += 1_000;
+  assert.ok(ringOf(() => root.emit("click", publish)) > plain);
+  glass.setAttribute("data-cuelume-emphasis", "subtle");
+  now += 1_000;
+  assert.ok(ringOf(() => root.emit("click", glass)) < plain);
+
+  // data-cuelume-theme picks the material, on the element or any ancestor; the innermost wins
+  const { THEMES } = await import("../dist/sounds/themes.js");
+  assert.equal(new Set(["default", "mech", "bubble"].map((theme) => THEMES[theme].tap.masterGain)).size, 3);
+  const modelMenu = new FakeElement(root, "DIV", { "data-cuelume-theme": "bubble" });
+  const model = new FakeElement(modelMenu, "BUTTON", { "data-cuelume-tap": "" });
+  now += 1_000;
+  assert.equal(played(1, () => root.emit("click", model)), THEMES.bubble.tap.masterGain);
+  model.setAttribute("data-cuelume-theme", "mech");
+  now += 1_000;
+  assert.equal(played(1, () => root.emit("click", model)), THEMES.mech.tap.masterGain);
+  model.setAttribute("data-cuelume-theme", "glass"); // unknown: the active theme
+  now += 1_000;
+  assert.equal(played(1, () => root.emit("click", model)), gainOf("tap"));
+
+  // toggle: switching off plays back, which sinks bubble's bloop
+  const sinks = (element) => {
+    const before = oscillators.length;
+    now += 1_000;
+    root.emit("click", element);
+    const bloop = oscillators[before];
+    return bloop.ramps[0] < bloop.value;
+  };
+  const bubbly = new FakeElement(root, "DIV", { "data-cuelume-theme": "bubble" });
+  // a native checkbox has already changed when its click arrives
+  const checkbox = Object.assign(new FakeElement(bubbly, "INPUT", { "data-cuelume-toggle": "" }), { type: "checkbox", checked: true });
+  assert.equal(sinks(checkbox), false);
+  checkbox.checked = false;
+  assert.equal(sinks(checkbox), true);
+  // ARIA state hasn't changed yet: "true" means this click switches it off
+  const toggleSwitch = new FakeElement(bubbly, "BUTTON", { "data-cuelume-toggle": "", "aria-checked": "true" });
+  assert.equal(sinks(toggleSwitch), true);
+  toggleSwitch.setAttribute("aria-checked", "false");
+  assert.equal(sinks(toggleSwitch), false);
+  assert.equal(sinks(new FakeElement(bubbly, "BUTTON", { "data-cuelume-toggle": "", "aria-pressed": "true" })), true);
+  // no state, a mixed state, or an input that isn't a checkbox: no direction
+  for (const element of [
+    new FakeElement(bubbly, "BUTTON", { "data-cuelume-toggle": "" }),
+    new FakeElement(bubbly, "BUTTON", { "data-cuelume-toggle": "", "aria-checked": "mixed" }),
+    Object.assign(new FakeElement(bubbly, "INPUT", { "data-cuelume-toggle": "" }), { type: "button", checked: false }),
+  ]) {
+    assert.equal(sinks(element), false);
+  }
 });
 
 test("finished shimmer graphs disconnect after their audible tail", async (context) => {
@@ -423,10 +1162,10 @@ test("finished shimmer graphs disconnect after their audible tail", async (conte
   setGlobal("window", { AudioContext: CleanupContext });
 
   const { play } = await import(`../dist/audio/engine.js?cleanup=${Date.now()}`);
-  play("chime");
+  play("success");
 
   assert.equal(timers.length, 1);
-  assert.equal(Math.round(timers[0].delay), 1176);
+  assert.equal(Math.round(timers[0].delay), 658);
   assert.equal(nodes.get("master").connections.includes(nodes.get("output")), true);
   assert.equal(nodes.get("wet-gain").connections.includes(nodes.get("output")), true);
   assert.deepEqual(nodes.get("output").connections, [nodes.get("limiter")]);
@@ -434,6 +1173,6 @@ test("finished shimmer graphs disconnect after their audible tail", async (conte
   timers[0].callback();
   assert.deepEqual(disconnected, ["master", "delay", "feedback-filter", "feedback-gain", "wet-gain"]);
 
-  play("chime");
+  play("success");
   assert.equal(timers.length, 2);
 });

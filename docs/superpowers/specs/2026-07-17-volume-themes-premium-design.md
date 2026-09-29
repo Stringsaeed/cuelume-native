@@ -1,6 +1,10 @@
 # Cuelume: Compact Adaptive Cues, Event-Aware Bindings, `mech`, and 1.0
 
-**Updated:** 2026-08-18 · **Status:** Revised proposal · **Target:** `v0.3` → `v0.4` → `v0.5` → `v1.0`
+**Updated:** 2026-09-23 · **Status:** v0.3, v0.4 prototype, and v0.5 `mech` built; none released · **Target:** `v0.3` → `v0.4` → `v0.5` → `v1.0`
+
+**Superseded in part** by [Professional Palette](2026-09-23-professional-palette-design.md):
+the palette grows to 13 cues and is retuned, and everything built so far ships
+in one publish instead of the staged rollout below.
 
 ## Decision
 
@@ -53,19 +57,37 @@ The canonical palette will contain nine cues:
 
 | Cue | Semantic job | Default-theme character |
 | --- | --- | --- |
-| `tap` | Buttons, links, and direct activation | Compact tactile pop |
-| `type` | Text-entry feedback | Soft rounded keycap with subtle variation |
-| `select` | Dropdown, menu, and list selection | Short precise pluck/detent |
+| `tap` | Buttons, links, and direct activation | Small glassy tap: a nail tick, then a brief shimmering ring |
+| `type` | Text-entry feedback | Keyboard keystroke (click, clack, thock, faint return), different every stroke |
+| `select` | Dropdown, menu, and list selection | Crisp woody detent |
 | `toggle` | Switching between states | Clear two-part state change |
-| `open` | Opening menus, drawers, dialogs, and disclosures | Gooey elastic stretch/pop |
-| `close` | Closing or dismissing UI | Short soft suction/collapse |
-| `success` | Confirmed successful completion | Warm restrained resolve |
-| `error` | Recoverable failure or refusal | Calm descending interruption |
-| `navigate` | Route, page, carousel, or gallery movement | Brief directional transition |
+| `open` | Opening menus, drawers, dialogs, and disclosures | Air drawing up, then a light latch |
+| `close` | Closing or dismissing UI | Air falling into a soft thud |
+| `success` | Confirmed successful completion | Two soft mallet notes rising a fifth |
+| `error` | Recoverable failure or refusal | Two muted mallet notes falling a minor third |
+| `navigate` | Route, page, carousel, or gallery movement | Soft whoosh that rises as it passes; direction can later reverse it |
 
 Names describe interface jobs rather than synthesis styles. A theme may change
 the material of a cue, but not its meaning. For example, `open` may sound
-organic and gooey in `default` and like a precise latch in `mech`.
+like soft air and a light latch in `default` and like a dry, precise latch in
+`mech`.
+
+### Sound direction
+
+Every cue must sound premium and belong in professional software. Nothing
+playful, cartoonish, or sci-fi. In practice:
+
+- Clicks, knocks, and air are filtered noise.
+- Tones are soft mallets (a sine plus a quiet partial at four times its pitch,
+  as on a marimba bar) or glass (sines at the glass-bar ratios 1 and 2.76,
+  with the fundamental doubled a few cents apart so it shimmers). No layer is
+  centred above 5 kHz. No
+  triangle, square, or sawtooth waveforms.
+- No audible tone slides in pitch. Glides stay on noise filters or sit below
+  about 40 ms, where they read as weight rather than a boing.
+- At most two notes per cue. Three-note arpeggios read as a game.
+- Rooms are short enough to hear as space, not as echo repeats.
+- Repeated cues vary within fixed bounds instead of repeating exactly.
 
 ### Sounds removed or combined
 
@@ -85,14 +107,16 @@ The current names migrate as follows during `v0.3`:
 | `success` | `success` |
 | `error` | `error` |
 | `page` | `navigate` |
-| `loading` | `open` |
+| `loading` | `tap` |
 | `ready` | `success` |
 | `pulse` | `tap` |
 | `scan` | `select` |
 | `arrival` | `navigate` |
 
 The mapping is for migration compatibility, not a claim that every old cue has
-an exact semantic equivalent.
+an exact semantic equivalent. `loading` has no equivalent at all: work
+starting is not a panel opening, so it falls back to the neutral `tap`
+acknowledgement rather than borrowing `open`'s meaning.
 
 ### Palette release gate
 
@@ -162,11 +186,15 @@ Typing sound must be deliberately constrained:
 - Only elements explicitly marked with `data-cuelume-type` participate.
 - Password fields never produce typing sounds.
 - Modifier-only keys, shortcut chords, composition events, and held-key repeats
-  are ignored.
+  are ignored, except Backspace and Delete: holding either keeps sounding while
+  it deletes, and modified deletes (word, line) count as edits.
+- Backspace and Delete stay silent when there is nothing to delete, such as
+  an empty field or a caret at the matching edge.
 - Printable editing input may include Backspace, Delete, Enter, and Space when
   appropriate.
 - Rapid input is rate-limited to avoid clipping and excessive node creation.
-- Several subtle internal variants prevent a mechanical machine-gun effect.
+- Every keystroke varies at random within fixed bounds (about ±7% pitch and
+  ±20% level), so fast typing never becomes a machine-gun effect.
 - Variation is curated internally and is not exposed as API configuration.
 
 ### Selection behavior
@@ -192,7 +220,15 @@ For `v0.3` only:
 - Existing sound names remain accepted by `play()` as deprecated aliases to
   the canonical replacements above.
 - Existing `data-cuelume-hover`, `data-cuelume-press`, and
-  `data-cuelume-release` bindings continue to work for migration.
+  `data-cuelume-release` bindings continue to work for migration, with two
+  changes so aliasing does not produce wrong or doubled cues:
+  - An empty `data-cuelume-hover` plays `select`, not `chime`. `chime` now
+    means `success`, and hovering is not a success.
+  - `data-cuelume-release` stays silent when the same element also carries
+    `data-cuelume-press`. Both now resolve to `tap`, so the old
+    press/release pair would otherwise play `tap` twice per click. The pair
+    plays one `tap`, on press.
+- `play()` with no name plays `tap`, replacing the old `chime` default.
 - `sounds` documents and returns the nine canonical names, not deprecated
   aliases.
 - Documentation leads with the new API and includes a concise migration table.
@@ -300,6 +336,25 @@ Before converting the whole palette, prototype the three most repeated cues:
 Proceed with all nine cue families only if listening tests show that these
 adaptations improve clarity or comfort rather than merely sounding different.
 
+**Prototype, 2026-09-23 (unreleased).** Built in `src/sounds/context.ts` as
+one small table of curated factors per context. Daniel chose to start it
+before v0.3 shipped. A shape scales pitch, level, length, bright layers
+(centred at 3 kHz or above), and late layers, and every factor is clamped:
+
+- `type`: cadence between 70 and 220 ms lightens, shortens, and drops the
+  key-return click; Space, Enter, and Delete each have their own shape.
+- `select`: ±5% pitch by direction, from marked siblings or `selectedIndex`.
+- `tap`: touch, keyboard, and pen shapes; cadence as for `type`.
+- Emphasis reaches all nine cues as an arrangement, not only a shape: each
+  layer can be marked with the lowest emphasis it plays at. `subtle` drops
+  the ornament layers, and every cue has one layer that only `strong` plays
+  (a lower glass body for `tap`, a deep bottom-out for `type`, an octave
+  under `success`, and so on). A light shape leans the same way. Daniel asked
+  for each level to sound different in character, not just heavier or
+  lighter, which gives developers 27 distinct sounds from nine cues.
+- The first pick in a custom select group starts from the option ARIA marks
+  as chosen, so direction works from the first click.
+
 For less repetitive cues:
 
 - `toggle` may distinguish its two state directions when state is available.
@@ -358,7 +413,8 @@ declare function setTheme(theme: ThemeName): void;
 Theme rules:
 
 - Both themes implement exactly the same nine canonical cues.
-- `default` is tactile, warm, and lightly organic.
+- `default` is tactile, warm, and premium: woody clicks, air, and soft
+  mallets.
 - `mech` is dry, precise, and mechanical without becoming harsh, industrial,
   retro-computer, or generic sci-fi.
 - Themes change sonic material, not cue semantics.
@@ -382,6 +438,12 @@ Work on `mech` starts only when:
 - The context model and `Emphasis` API pass the adaptive release gate.
 - All nine default-theme cue families have stable adaptation boundaries.
 - Real interface testing reveals no missing high-frequency semantic cue.
+
+**Built 2026-09-23 (unreleased).** Daniel approved starting `mech` before the
+palette and adaptive listening gates, and accepted the bundle growth (4.7 kB
+min+gzip with both themes). `src/sounds/mech.ts` holds the nine recipes, each
+tagged for emphasis like the default palette, level-matched to it on the
+loudest 30 ms within about 1 dB. `setTheme` and `themes` ship as specified.
 
 ### `mech` release gate
 
@@ -425,6 +487,63 @@ Alongside `SoundName`, `ThemeName`, and `Emphasis`, `1.0` guarantees:
 
 `1.0` means the compact API is dependable. It does not require more features.
 
+## Proposed: AI interface cues
+
+**Status:** proposed 2026-09-23, not scheduled.
+
+Daniel is building an AI interface library that would offer Cuelume as
+optional feedback. AI interfaces have moments a classic form or menu does
+not, so the nine cues need checking against them before the palette freezes.
+
+Most AI moments already have a cue:
+
+| AI moment | Cue |
+| --- | --- |
+| Send a prompt | `tap` |
+| Stop a generation | `close` |
+| Dismiss or reject a suggestion | `close` |
+| Switch model or mode | `select` |
+| Open a chat panel or sidebar | `open` |
+| Move between threads | `navigate` |
+| An action the user asked for completes (file saved, PR opened) | `success` |
+| Model, tool, or network failure | `error` |
+
+Three jobs have no cue:
+
+- **Work started.** An unresolved "working on it" after the user asks for
+  something slow. This is the job `loading` did in v0.2; v0.3 maps it to
+  `tap` for lack of anything better.
+- **Result ready.** A reply finished streaming or a background job produced
+  output. `success` is the wrong cue: a finished answer is not a confirmed
+  operation, and a success chime after every reply wears it out. This is the
+  job `ready` did in v0.2.
+- **Needs you.** The agent is blocked on approval, a choice, or input. The
+  only cue meant to be noticed when the user is looking elsewhere.
+
+Rules for any additions:
+
+- Names describe the interface job, so they also serve uploads, exports, and
+  other slow non-AI work. Nothing named after AI.
+- No cue per streamed token or chunk, and none per tool call inside an agent
+  run. Both fire too often, for the same reason hover is out.
+- At most three additions. Each new cue is another adaptive family in `v0.4`
+  and another `mech` recipe in `v0.5`.
+- Promoting `loading` and `ready` back to canonical cues is the obvious
+  option. Both names are still live aliases, so apps that use them would get
+  back a cue close to the one they chose. The palette gate still applies:
+  each must be distinguishable from `tap` and `success` in blind listening.
+- The AI library keeps Cuelume optional, for example as a `sound` option that
+  the host fills with `play`, so the library itself stays dependency-free.
+
+**Decided 2026-09-23:** `loading`, `ready`, and `attention` join the palette,
+with `warning`, in the [Professional Palette](2026-09-23-professional-palette-design.md)
+spec. Kept below for the reasoning.
+
+**Decision point:** during the v0.3 validation step, with the AI library as
+one of the real interfaces. Adding cues does not break anything, but it has to
+happen before `v0.4` starts, while there is one sound per cue rather than a
+family per cue in two themes.
+
 ## Documentation plan
 
 For `v0.3`:
@@ -462,8 +581,11 @@ Automated tests for `v0.3` should confirm:
 - `sounds` contains exactly the nine canonical cue names.
 - Every canonical cue plays through the existing shared audio engine.
 - Deprecated names resolve to the documented canonical cues.
+- An empty legacy hover binding plays `select`.
+- A legacy press/release pair plays one cue per click.
 - New declarative bindings are delegated, dynamic, and idempotent.
 - Typing filters modifiers, repeats, composition, and password fields.
+- Held Backspace and Delete keep sounding until nothing is left to delete.
 - Typing rate limiting prevents excessive playback.
 - Native selection plays once on `change`.
 - Custom selection plays once on activation.
@@ -500,7 +622,8 @@ require listening checks rather than tests of internal synthesis values.
 1. **`v0.3` — Palette reset:** ship nine canonical cues, event-aware bindings,
    migration aliases, and updated documentation.
 2. Validate the default palette in real buttons, text fields, native selects,
-   custom menus, dialogs, async actions, and route transitions.
+   custom menus, dialogs, async actions, and route transitions. Include the AI
+   interface library and settle the proposed AI cues before `v0.4`.
 3. **`v0.4` — Adaptive cues:** prototype `type`, `select`, and `tap`, validate
    the benefit, then ship bounded cue families for all nine cues with emphasis.
 4. Validate cadence, direction, repetition, input method, and emphasis in real
