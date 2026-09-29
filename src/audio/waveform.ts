@@ -7,8 +7,10 @@
 
 import { OfflineAudioContext } from "react-native-audio-api";
 
-import { renderRecipe, shimmerTail, sourceEnd } from "./engine.js";
-import { RECIPES, isSoundName, type SoundName, type SoundRecipe } from "../sounds/recipes.js";
+import { ROOM_SECONDS, renderRecipe, sourceEnd } from "./engine.js";
+import { arrangement, shapeFor } from "../sounds/context.js";
+import { resolveSound, type SoundLayer, type SoundName, type SoundRecipe } from "../sounds/recipes.js";
+import { THEMES, isThemeName, type ThemeName } from "../sounds/themes.js";
 
 const SAMPLE_RATE = 44100;
 const DEFAULT_RESOLUTION = 180;
@@ -23,10 +25,8 @@ export type SoundWaveform = {
 };
 
 /** The audible signal length: the latest point any layer's envelope finishes, with no padding. */
-function soundDuration(recipe: SoundRecipe): number {
-  return Math.max(
-    ...recipe.layers.map((layer) => (layer.offset ?? 0) + layer.attack + layer.decay),
-  );
+function soundDuration(layers: SoundLayer[]): number {
+  return Math.max(...layers.map((layer) => (layer.offset ?? 0) + layer.attack + layer.decay));
 }
 
 /**
@@ -64,37 +64,42 @@ function normalize(peaks: Float32Array): Float32Array {
 
 /**
  * Renders `name`'s real synthesis output offline and returns a compact
- * waveform preview of it. Independent of `setVolume()` — this is the sound's
- * intrinsic shape at nominal volume, not scaled by playback preferences.
+ * waveform preview of it, as it plays with no interaction context and normal
+ * emphasis. Independent of `setVolume()` and `setTheme()` — this is the
+ * sound's intrinsic shape at nominal volume, not scaled by playback
+ * preferences; pass `theme` to preview another material.
  *
  * Throws if `name` isn't a known sound; unlike `play()`, this isn't meant to
  * absorb bad input silently.
  */
 export async function getSoundWaveform(
   name: SoundName,
-  options?: { resolution?: number },
+  options?: { resolution?: number; theme?: ThemeName },
 ): Promise<SoundWaveform> {
-  if (!isSoundName(name)) {
+  const sound = resolveSound(name);
+  if (!sound) {
     throw new TypeError(`getSoundWaveform: "${String(name)}" is not a known sound name.`);
   }
 
   const resolution = options?.resolution ?? DEFAULT_RESOLUTION;
-  const recipe: SoundRecipe = RECIPES[name];
-  const duration = soundDuration(recipe);
-  const tail = shimmerTail(recipe.shimmer);
-  const renderSeconds = sourceEnd(recipe) + tail;
+  const theme = isThemeName(options?.theme) ? options.theme : "default";
+  const recipe: SoundRecipe = THEMES[theme][sound];
+  const shape = shapeFor(sound, {}, "normal", Infinity);
+  const layers = arrangement(recipe.layers, "normal");
+  const duration = soundDuration(layers);
+  const renderSeconds = sourceEnd(layers) + ROOM_SECONDS;
   const length = Math.max(1, Math.ceil(renderSeconds * SAMPLE_RATE));
 
   const context = new OfflineAudioContext(1, length, SAMPLE_RATE);
-  renderRecipe(context, recipe, RENDER_VOLUME);
+  renderRecipe(context, sound, recipe, RENDER_VOLUME, "normal", shape);
   const buffer = await context.startRendering();
 
-  // Trace only `duration + tail` — the audible envelope plus any shimmer
-  // decay. Excludes `sourceEnd`'s internal SOURCE_STOP_PADDING bookkeeping
-  // margin, which is silent and would otherwise waste most of a short,
-  // non-shimmer sound's trace (e.g. `tick`) on a flat tail.
+  // Trace only the audible envelope. Excludes `sourceEnd`'s internal
+  // SOURCE_STOP_PADDING bookkeeping margin and the room's faint tail (about
+  // 22 dB under the sound), which are near-silent and would otherwise waste
+  // most of a short sound's trace (e.g. `select`) on a flat tail.
   const raw = buffer.getChannelData(0);
-  const visibleSamples = Math.max(1, Math.min(raw.length, Math.ceil((duration + tail) * SAMPLE_RATE)));
+  const visibleSamples = Math.max(1, Math.min(raw.length, Math.ceil(duration * SAMPLE_RATE)));
   const peaks = normalize(extractPeaks(raw.subarray(0, visibleSamples), resolution));
 
   return { peaks, duration, sampleRate: SAMPLE_RATE };

@@ -80,7 +80,7 @@ function AppContent() {
           <Text style={styles.title}>Cuelume Native</Text>
         </View>
         <Text style={styles.subtitle}>
-          Seventeen interaction sounds, synthesized live via
+          Fourteen interaction sounds, synthesized live via
           react-native-audio-api.
         </Text>
 
