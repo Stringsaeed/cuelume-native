@@ -71,17 +71,17 @@ play("success", { volume: 0.4 }); // quieter for this play only
 | `tap`       | Buttons, links, direct activation     | Small glassy tap                           |
 | `type`      | Text entry                            | Keyboard keystroke, different every stroke |
 | `select`    | Dropdowns, menus, lists               | Crisp woody detent                         |
-| `toggle`    | Switching between states              | Two-part click-clack                       |
-| `open`      | Menus, drawers, dialogs, disclosures  | Air drawing up, then a light latch         |
-| `close`     | Closing or dismissing                 | Air falling into a soft thud               |
+| `toggle`    | Switching between states              | One crisp snap with a knock of body                       |
+| `open`      | Menus, drawers, dialogs, disclosures  | Air drawing up over a light mallet note         |
+| `close`     | Closing or dismissing                 | Air falling shut over a low, damped note               |
 | `navigate`  | Routes, pages, carousels, galleries   | Soft whoosh that rises, and falls going back |
-| `success`   | Confirmed completion                  | Two soft mallet notes, rising              |
-| `warning`   | Done, but needs a look                | One mallet note, struck twice              |
-| `error`     | Recoverable failure or refusal        | Two muted mallet notes, falling            |
-| `loading`   | Slow work started                     | One muted note that swells in              |
-| `ready`     | A result is there, nothing confirmed  | One glass note in a small room             |
-| `attention` | Blocked until the user answers        | Two glass notes rising, like a call        |
-| `count`     | A number animating to a new value     | Soft ticks that slow down, then land       |
+| `success`   | Confirmed completion                  | One soft mallet chord, C–G–E spread wide              |
+| `warning`   | Done, but needs a look                | One mallet fifth, A and E              |
+| `error`     | Recoverable failure or refusal        | One muted low chord, short            |
+| `loading`   | Slow work started                     | One soft, low note that swells and fades   |
+| `ready`     | A result is there, nothing confirmed  | One warm glass note in a small room             |
+| `attention` | Blocked until the user answers        | One high glass bell, ringing longest        |
+| `count`     | A number animating to a new value     | One breath that rises with the count       |
 
 The material tells you the kind of event before you know which one: mallets for outcomes, glass for presence, air for motion, wood and keys for input.
 
@@ -164,7 +164,7 @@ play("count", { duration: 900 });                    // 0 → 1,284
 play("count", { duration: 400, direction: "back" }); // 12 → 3
 ```
 
-About ten ticks slow down as the number eases out, then land. `duration` is in milliseconds, clamped to 300–2000; without it the roll takes 800 ms. Leave numbers that change more than about once a second, like a live price, silent.
+One breath rises with the number (and falls counting down), lasting as long as the roll. `duration` is in milliseconds, clamped to 300–2000; without it the roll takes 800 ms. Leave numbers that change more than about once a second, like a live price, silent.
 
 ## Context-aware
 
@@ -210,7 +210,7 @@ Context comes from the current event and the timing of recent plays on the same 
 
 ## Themes
 
-Every cue comes in three finished materials. `default` is warm: glass, wood, air, and soft mallets. `mech` is dry and precise: a shutter click, a ratchet detent, a latch, struck metal. `bubble` is playful, and every cue is its own gesture: a knock, a drip, a cork, a gulp, a kalimba, a zip. All three have the same fourteen cues, context, and emphasis, and they're level-matched, so switching changes the material, not the volume.
+Every cue comes in four finished materials. `default` is warm: glass, wood, air, and soft mallets. `mech` is dry and precise: a shutter click, a ratchet detent, a latch, struck metal. `bubble` is playful, and every cue is its own gesture: a knock, a drip, a cork, a gulp, a kalimba, a zip. `press` is one premium switch: every interaction is a crisp click over the knock of whatever it moves, and tap lets its body ring like a trackpad under a finger. Outcomes are not touched, so they do not click: success, error, warning, ready and attention are that warm note on its own, with a chord that says what happened, and `loading` is one soft, low note that swells and fades. Whatever the theme, every cue is one sound: it strikes once. All four have the same fourteen cues, context, and emphasis, and they're level-matched, so switching changes the material, not the volume.
 
 ```ts
 import { play, setTheme } from "cuelume";
@@ -229,7 +229,7 @@ play("select", { theme: "bubble" }); // one playful moment; the theme stays defa
 
 `setTheme` applies to sounds played after the call. The `theme` option and `data-cuelume-theme` (on an element or any ancestor; the innermost wins) apply to one play and leave the active theme alone. Unknown names are ignored, and like volume, the choice isn't stored.
 
-`default` and `mech` sit in a calm register for all-day use. Reach for `bubble` when a product, or one moment in it, should feel playful.
+`default` and `mech` sit in a calm register for all-day use. Reach for `bubble` when a product, or one moment in it, should feel playful, and `press` when it should feel like touching hardware: clicky, deep and precise.
 
 ## Sound settings
 
@@ -265,11 +265,11 @@ import { play, bind, setEnabled, setVolume, setTheme, sounds, themes, type Sound
 - **`setEnabled(enabled: boolean)`**: enable or disable future playback. Does not persist the preference or stop sounds already playing.
 - **`setVolume(volume: number)`**: set the global volume for future playback, clamped to `0–1`. Non-finite values are ignored and preferences are not persisted.
 - **`setTheme(theme: ThemeName)`**: switch the material of future playback. Unknown names are ignored; the choice isn't persisted.
-- **`themes`**: the built-in theme names, `["default", "mech", "bubble"]`.
+- **`themes`**: the built-in theme names, `["default", "mech", "bubble", "press"]`.
 - **`sounds`**: the fourteen cue names.
 - **`SoundName`**: union type of the fourteen cue names.
 - **`Emphasis`**: `"subtle" | "normal" | "strong"`.
-- **`ThemeName`**: `"default" | "mech" | "bubble"`.
+- **`ThemeName`**: `"default" | "mech" | "bubble" | "press"`.
 
 ## Migrating from 0.2
 
@@ -300,6 +300,8 @@ The old bindings also keep working until 1.0:
 - **One cue per action.** An event plays at most one cue, even with nested marked elements or several bound roots.
 - **Keyboard included.** Click bindings follow native activation, so Enter and Space on a button play the same cue as a click.
 - **Audible without clipping.** One shared boosted output stage keeps sounds clear, with native compression protecting overlapping cues.
+- **Struck, not played back.** Tones are modelled on real bars: each overtone dies faster the higher it is, and a brief mallet contact starts the note. Every play of a frequent cue is one strike, a little harder or softer than the last, so a harder one is louder and brighter together and no two sound identical. Outcome cues play the same every time, so their meaning never blurs.
+- **One faint room.** Every cue rings very faintly into one shared, short stereo room (about 22 dB down), which places it in the space around the listener rather than inside their head. `success` and `ready` ring into it a little more.
 - **One lazy `AudioContext`.** Shared across all sounds, created on first use.
 - **Autoplay-friendly.** Attempts to resume suspended audio without surfacing errors when a browser blocks it.
 - **SSR-safe.** Importing on the server is a no-op.

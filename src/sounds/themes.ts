@@ -5,12 +5,14 @@
 
 import { BUBBLE } from "./bubble.js";
 import { MECH } from "./mech.js";
+import { PRESS } from "./press.js";
 import { RECIPES, type SoundName, type SoundRecipe } from "./recipes.js";
 
 export const THEMES = {
   default: RECIPES,
   mech: MECH,
   bubble: BUBBLE,
+  press: PRESS,
 } satisfies Record<string, Record<SoundName, SoundRecipe>>;
 
 export type ThemeName = keyof typeof THEMES;

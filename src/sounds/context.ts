@@ -55,7 +55,7 @@ const DIRECTION_STEP = 0.05;
 /** Repeats closer than FAST_MS play fully lightened; slower than SLOW_MS, not at all. */
 const FAST_MS = 70;
 const SLOW_MS = 220;
-const CADENCE_CUES: ReadonlySet<SoundName> = new Set(["type", "select", "tap"]);
+const CADENCE_CUES: ReadonlySet<SoundName> = new Set(["type", "select", "tap", "toggle", "navigate"]);
 
 /** `count` is written at COUNT_MS; `duration` stretches it within these bounds. */
 const COUNT_MS = 800;

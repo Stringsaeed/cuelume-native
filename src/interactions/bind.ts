@@ -193,10 +193,15 @@ export function bind(root?: ParentNode): void {
     if (!(event.target instanceof Element)) return null;
     const element = event.target.closest<HTMLElement>(CLICK_SELECTOR);
     if (!element || !(scope as Node).contains(element)) return null;
+    // A label around its control gets two clicks, its own and the one it forwards
+    // to the control. Only the forwarded one plays, and it reads the control's state.
+    const control = element.tagName === "LABEL" ? (element as HTMLLabelElement).control : null;
+    const inside = control && element.contains(control) ? control : null;
+    if (inside && event.target !== inside) return null;
     const attr = Object.keys(CLICK_CUES).find((name) => element.hasAttribute(name))!;
     const selecting = attr === "data-cuelume-select";
     if (selecting && isNativeControl(element)) return null;
-    const direction = selecting ? siblingDirection(element) : attr === "data-cuelume-toggle" ? switched(element) : undefined;
+    const direction = selecting ? siblingDirection(element) : attr === "data-cuelume-toggle" ? switched(inside ?? element) : undefined;
     return [element, attr, CLICK_CUES[attr], { input: inputMethod(event), direction }];
   });
 

@@ -28,6 +28,9 @@ const audioParam = () => ({
     this.ramps.push(value);
     this.rampTimes.push(time);
   },
+  linearRampToValueAtTime(value) {
+    this.swell = value;
+  },
 });
 
 function compressor(node) {
@@ -69,6 +72,9 @@ function recordingContext() {
     createGain() {
       return Object.assign(new Node(), { gain: audioParam() });
     }
+    createConvolver() {
+      return Object.assign(new Node(), { buffer: null, normalize: true });
+    }
     createDynamicsCompressor() {
       return compressor(new Node());
     }
@@ -94,6 +100,12 @@ function recordingContext() {
   }
   return { Context, log };
 }
+
+// How far one play can move a layer's pitch or filter from its recipe: the strike's pitch, and for
+// noise the strike's force too (a harder strike is brighter), or for a tone a little mode jitter.
+const MODE_JITTER = 0.005;
+const spread = (layer, vary) =>
+  vary ? (1 + vary.pitch) * (1 + (layer.kind === "noise" ? vary.level : MODE_JITTER)) - 1 : 0;
 
 const CANONICAL = [
   "tap", "type", "select", "toggle", "open", "close", "success", "error", "navigate",
@@ -217,7 +229,7 @@ test("every theme carries the same cues, each arranged for every emphasis", asyn
   const { themes, sounds } = await import("../dist/index.js");
   const { THEMES } = await import("../dist/sounds/themes.js");
   const { arrangement } = await import("../dist/sounds/context.js");
-  assert.deepEqual(themes, ["default", "mech", "bubble"]);
+  assert.deepEqual(themes, ["default", "mech", "bubble", "press"]);
   for (const theme of themes) {
     assert.deepEqual(Object.keys(THEMES[theme]), [...sounds], theme);
     for (const cue of sounds) {
@@ -240,7 +252,7 @@ test("every layer keeps the register: nothing above 5 kHz, sines only, and outsi
   for (const [theme, cues] of Object.entries(THEMES)) {
     for (const [cue, recipe] of Object.entries(cues)) {
       // a room is for results that land
-      if (recipe.shimmer) assert.ok(cue === "success" || cue === "ready", `${theme} ${cue} has a room`);
+      if (recipe.room) assert.ok(cue === "success" || cue === "ready", `${theme} ${cue} rings into the room`);
       for (const layer of recipe.layers) {
         const centre = Math.max(layer.kind === "tone" ? layer.frequency : layer.filterFrequency, layer.glideTo ?? 0);
         assert.ok(centre <= 5000, `${theme} ${cue}: ${centre} Hz`);
@@ -260,37 +272,75 @@ test("every layer keeps the register: nothing above 5 kHz, sines only, and outsi
   }
 });
 
-test("outcome cues keep their contour in every theme", async () => {
-  const { THEMES } = await import("../dist/sounds/themes.js");
-  // the lowest core layer (no emphasis tag) at each onset, in time order
-  const onsets = (recipe) => {
-    const byOffset = new Map();
-    for (const layer of recipe.layers) {
-      if (layer.from) continue;
-      const hz = layer.kind === "tone" ? layer.frequency : layer.filterFrequency;
-      const at = layer.offset ?? 0;
-      byOffset.set(at, Math.min(hz, byOffset.get(at) ?? Infinity));
+test("a struck note's higher modes die sooner, and none rises past the register", async () => {
+  const { struck, BAR, MALLET } = await import("../dist/sounds/recipes.js");
+  for (const material of [BAR, MALLET]) {
+    for (const frequency of [220, 880, 1318.51]) {
+      const modes = struck(frequency, 0.4, 0.02, material);
+      assert.equal(modes[0].frequency, frequency);
+      assert.ok(modes.every((mode) => mode.frequency <= 5000), `${frequency} Hz stays under 5 kHz`);
+      for (let i = 1; i < modes.length; i++) {
+        assert.ok(modes[i].frequency > modes[i - 1].frequency && modes[i].decay < modes[i - 1].decay, `${frequency} Hz mode ${i} dies sooner`);
+        assert.equal(modes[i].from, "normal", "upper modes are ornament");
+      }
     }
-    return [...byOffset].sort(([a], [b]) => a - b).map(([, hz]) => hz);
-  };
+  }
+  // a strong-only note keeps every mode strong-only
+  assert.ok(struck(220, 0.4, 0.02, BAR, { from: "strong" }).every((mode) => mode.from === "strong"));
+});
+
+test("every cue is one sound: all its layers strike together, in every theme", async () => {
+  const { THEMES } = await import("../dist/sounds/themes.js");
   for (const [theme, cues] of Object.entries(THEMES)) {
-    const [s1, s2] = onsets(cues.success);
-    const [e1, e2] = onsets(cues.error);
-    const [w1, w2] = onsets(cues.warning);
-    const [a1, a2] = onsets(cues.attention);
-    assert.ok(s2 > s1, `${theme} success rises`);
-    assert.ok(e2 < e1, `${theme} error falls`);
-    assert.equal(w2, w1, `${theme} warning stays level`);
-    assert.ok(a2 > a1, `${theme} attention rises`);
-    assert.equal(onsets(cues.ready).length, 1, `${theme} ready is one note`);
-    // randomness never blurs a contour: warning's notes stay one pitch, and select's ±5% direction outweighs its jitter
-    assert.equal(cues.warning.vary?.pitch ?? 0, 0, `${theme} warning's notes stay one pitch`);
+    for (const [cue, recipe] of Object.entries(cues)) {
+      for (const layer of recipe.layers) assert.equal(layer.offset ?? 0, 0, `${theme} ${cue} strikes twice`);
+    }
+  }
+});
+
+test("outcome cues keep their meaning in one strike, in every theme", async () => {
+  const { THEMES } = await import("../dist/sounds/themes.js");
+  // the tones every emphasis plays, at the pitch each settles on
+  const core = (recipe) => recipe.layers.filter((layer) => !layer.from && layer.kind === "tone");
+  const settled = (layer) => layer.glideTo ?? layer.frequency;
+  const lowest = (recipe) => Math.min(...core(recipe).map((layer) => layer.frequency));
+  // a chord: two pitches that are not the same note in another octave
+  const chord = (recipe) => {
+    const pitches = core(recipe).map(settled);
+    return pitches.some((a) => pitches.some((b) => {
+      const octaves = Math.abs(Math.log2(a / b));
+      return Math.abs(octaves - Math.round(octaves)) > 0.05;
+    }));
+  };
+  const glides = (recipe) => core(recipe).filter((layer) => layer.glideTo !== undefined).map((layer) => layer.glideTo / layer.frequency);
+
+  for (const [theme, cues] of Object.entries(THEMES)) {
+    const { success, error, warning, attention, ready } = cues;
+    // register carries the meaning: error sits lowest, success above warning, attention at or above success
+    assert.ok(lowest(error) < lowest(warning), `${theme} error below warning`);
+    assert.ok(lowest(warning) < lowest(success), `${theme} warning below success`);
+    assert.ok(lowest(attention) >= lowest(success), `${theme} attention at or above success`);
+    assert.ok(lowest(ready) < lowest(success), `${theme} ready below success`);
+    // randomness never blurs it: outcomes and select's direction keep their pitch
+    for (const cue of ["success", "error", "warning", "attention"]) assert.equal(cues[cue].vary?.pitch ?? 0, 0, `${theme} ${cue} keeps its pitch`);
     assert.ok((cues.select.vary?.pitch ?? 0) < 0.05, `${theme} select's direction outweighs its randomness`);
+    if (theme === "bubble") {
+      // bubble says it with one glide: success and attention rise, error sinks, warning stays level
+      assert.ok(glides(success).length && glides(success).every((r) => r > 1), "bubble success rises");
+      assert.ok(glides(attention).length && glides(attention).every((r) => r > 1), "bubble attention rises");
+      assert.ok(glides(error).length && glides(error).every((r) => r < 1), "bubble error sinks");
+      assert.ok(glides(warning).every((r) => Math.abs(r - 1) < 0.15), "bubble warning stays level");
+    } else {
+      // the others strike a chord at once
+      for (const cue of ["success", "error", "warning"]) assert.ok(chord(cues[cue]), `${theme} ${cue} is a chord`);
+    }
   }
 });
 
 test("count follows its duration and falls going back, in every theme and emphasis", async (context) => {
   context.after(restoreGlobals);
+  // no per-play variation, so two plays can be compared exactly
+  context.mock.method(Math, "random", () => 0.5);
   const { Context, log } = recordingContext();
   setGlobal("setTimeout", (callback, delay) => {
     log.delays.push(delay);
@@ -298,6 +348,7 @@ test("count follows its duration and falls going back, in every theme and emphas
   });
   setGlobal("window", { AudioContext: Context });
   const { play, setTheme } = await import(`../dist/audio/engine.js?count=${Date.now()}`);
+  play("tap"); // builds the shared output and room, so what follows logs one pitched param per layer
   const { THEMES } = await import("../dist/sounds/themes.js");
   const { arrangement } = await import("../dist/sounds/context.js");
 
@@ -367,6 +418,7 @@ test("a per-play theme plays that theme once and leaves the active one", async (
   setGlobal("setTimeout", () => 0);
   setGlobal("window", { AudioContext: Context });
   const { play, setTheme } = await import(`../dist/audio/engine.js?theme=${Date.now()}`);
+  play("tap"); // builds the shared output and room, so what follows logs only the cue's own params
   const { THEMES } = await import("../dist/sounds/themes.js");
 
   // tap's first layer tells the themes apart: a noise tick in default and mech, a bloop in bubble
@@ -378,7 +430,7 @@ test("a per-play theme plays that theme once and leaves the active one", async (
   const is = (theme, value) => {
     const { layers, vary } = THEMES[theme].tap;
     const base = layers[0].kind === "tone" ? layers[0].frequency : layers[0].filterFrequency;
-    return Math.abs(value / base - 1) <= (vary?.pitch ?? 0) + 1e-9;
+    return Math.abs(value / base - 1) <= spread(layers[0], vary) + 1e-9;
   };
 
   assert.ok(is("default", firstPitch()));
@@ -391,6 +443,97 @@ test("a per-play theme plays that theme once and leaves the active one", async (
   }
   assert.ok(is("mech", firstPitch()));
   setTheme("default");
+});
+
+test("a cue plays one voice at a time: a new play releases the last, other cues ring on", async (context) => {
+  context.after(restoreGlobals);
+  const { Context } = recordingContext();
+  const gains = [];
+  class Recording extends Context {
+    currentTime = 5;
+    createGain() {
+      const gain = super.createGain();
+      gains.push(gain);
+      return gain;
+    }
+  }
+  setGlobal("setTimeout", () => 0);
+  setGlobal("window", { AudioContext: Recording });
+  const { play } = await import(`../dist/audio/engine.js?voice=${Date.now()}`);
+  const { THEMES } = await import("../dist/sounds/themes.js");
+
+  // a play's master is the gain set straight to its recipe's level
+  const master = (cue) => {
+    const before = gains.length;
+    play(cue);
+    return gains.slice(before).find((gain) => gain.gain.value === THEMES.default[cue].masterGain);
+  };
+  const first = master("tap");
+  const other = master("success");
+  assert.equal(first.gain.ramps.length, 0, "another cue leaves tap ringing");
+  const second = master("tap");
+  // the last tap fades out quickly from where it is, and the new one plays in full
+  assert.deepEqual(first.gain.ramps, [0.0001]);
+  assert.equal(first.gain.setAt, 5);
+  assert.ok(first.gain.rampTimes[0] > 5 && first.gain.rampTimes[0] <= 5.1);
+  assert.equal(second.gain.ramps.length, 0);
+  assert.equal(other.gain.ramps.length, 0);
+});
+
+test("one strike per play: every layer shares it, harder is louder and brighter, and only cues with vary move", async (context) => {
+  context.after(restoreGlobals);
+  const { Context, log } = recordingContext();
+  const gains = [];
+  class Recording extends Context {
+    createGain() {
+      const gain = super.createGain();
+      gains.push(gain);
+      return gain;
+    }
+  }
+  setGlobal("setTimeout", () => 0);
+  setGlobal("window", { AudioContext: Recording });
+  const { play } = await import(`../dist/audio/engine.js?strike=${Date.now()}`);
+  const { THEMES } = await import("../dist/sounds/themes.js");
+  const { arrangement } = await import("../dist/sounds/context.js");
+  play("tap"); // builds the shared output and room first
+
+  // how each layer of one play landed against its recipe: level, pitch or filter, and ring length
+  const struck = (theme, cue) => {
+    const [g, p] = [gains.length, log.pitched.length];
+    play(cue, { theme });
+    const layerGains = gains.slice(g + 2); // after the play's master and its room send
+    const pitched = log.pitched.slice(p);
+    return arrangement(THEMES[theme][cue].layers, "normal").map((layer, i) => ({
+      layer,
+      level: layerGains[i].gain.swell / layer.peak,
+      pitch: pitched[i].value / (layer.kind === "tone" ? layer.frequency : layer.filterFrequency),
+      ring: (layerGains[i].gain.rampTimes[0] - layer.attack) / layer.decay,
+    }));
+  };
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+
+  // press open varies in level only: no pitch, so a noise layer's filter moves with its level alone
+  const { level: bound } = THEMES.press.open.vary;
+  const forces = [];
+  for (let i = 0; i < 30; i++) {
+    const layers = struck("press", "open");
+    const force = layers[0].level;
+    forces.push(force);
+    assert.ok(Math.abs(force - 1) <= bound + 1e-9);
+    for (const { layer, level, pitch, ring } of layers) {
+      assert.ok(near(level, force), "every layer is struck as hard");
+      if (layer.kind === "noise") assert.ok(near(pitch, force), "a harder strike is brighter");
+      else assert.ok(Math.abs(pitch - 1) <= 0.005 + 1e-9, "a tone's mode moves a hair");
+      assert.ok(Math.abs(ring - 1) <= 0.1 + 1e-9, "each layer rings a little longer or shorter");
+    }
+  }
+  assert.ok(new Set(forces).size > 25, "no two strikes match");
+
+  // default success has no vary: every play is the recipe exactly
+  for (let i = 0; i < 3; i++) {
+    for (const { level, pitch, ring } of struck("default", "success")) assert.ok(near(level, 1) && near(pitch, 1) && near(ring, 1));
+  }
 });
 
 test("play waits for user activation before creating AudioContext", async (context) => {
@@ -512,6 +655,9 @@ test("volume is clamped and one boosted output bus is reused", async (context) =
       gains.push(gain);
       return gain;
     }
+    createConvolver() {
+      return Object.assign(new AudioNodeStub("room"), { buffer: null, normalize: true });
+    }
     createDynamicsCompressor() {
       const node = compressor(new AudioNodeStub("compressor"));
       compressors.push(node);
@@ -595,6 +741,9 @@ test("every cue renders, deprecated names play, and every keystroke varies withi
     createGain() {
       return Object.assign(new AudioNodeStub(), { gain: audioParam() });
     }
+    createConvolver() {
+      return Object.assign(new AudioNodeStub(), { buffer: null, normalize: true });
+    }
     createDynamicsCompressor() {
       return compressor(new AudioNodeStub());
     }
@@ -657,24 +806,25 @@ test("every cue renders, deprecated names play, and every keystroke varies withi
   const { THEMES } = await import("../dist/sounds/themes.js");
   const near = (value, base, bound) => Math.abs(value / base - 1) <= bound + 1e-9;
   const mechTap = THEMES.mech.tap;
-  assert.ok(near(firstFilterOf("tap"), THEMES.default.tap.layers[0].filterFrequency, THEMES.default.tap.vary.pitch));
+  const defaultTap = THEMES.default.tap;
+  assert.ok(near(firstFilterOf("tap"), defaultTap.layers[0].filterFrequency, spread(defaultTap.layers[0], defaultTap.vary)));
   setTheme("mech");
-  assert.ok(near(firstFilterOf("tap"), mechTap.layers[0].filterFrequency, mechTap.vary?.pitch ?? 0));
+  assert.ok(near(firstFilterOf("tap"), mechTap.layers[0].filterFrequency, spread(mechTap.layers[0], mechTap.vary)));
   setTheme("glass");
   setTheme(undefined);
-  assert.ok(near(firstFilterOf("tap"), mechTap.layers[0].filterFrequency, mechTap.vary?.pitch ?? 0));
+  assert.ok(near(firstFilterOf("tap"), mechTap.layers[0].filterFrequency, spread(mechTap.layers[0], mechTap.vary)));
   const before = renders;
   for (const cue of CANONICAL) {
     for (const emphasis of ["subtle", "normal", "strong"]) play(cue, { emphasis });
   }
   assert.equal(renders - before, CANONICAL.length * 3);
   setTheme("default");
-  assert.ok(near(firstFilterOf("tap"), THEMES.default.tap.layers[0].filterFrequency, THEMES.default.tap.vary.pitch));
+  assert.ok(near(firstFilterOf("tap"), defaultTap.layers[0].filterFrequency, spread(defaultTap.layers[0], defaultTap.vary)));
 
   // type's first layer is the switch click; its filter shows each stroke's pitch.
   const { RECIPES } = await import("../dist/sounds/recipes.js");
   const base = RECIPES.type.layers[0].filterFrequency;
-  const bound = RECIPES.type.vary.pitch;
+  const bound = spread(RECIPES.type.layers[0], RECIPES.type.vary);
   const clicks = [];
   for (let i = 0; i < 200; i++) {
     const before = filters.length;
@@ -719,7 +869,7 @@ test("every cue renders, deprecated names play, and every keystroke varies withi
   }
   const within = (cue, layer, context) => {
     const expected = shapeFor(cue, context, "normal", SLOW).pitch;
-    const bound = RECIPES[cue].vary.pitch;
+    const bound = spread(RECIPES[cue].layers[layer], RECIPES[cue].vary);
     for (let i = 0; i < 20; i++) {
       const ratio = played(cue, context)[0].frequency.value / RECIPES[cue].layers[layer].filterFrequency;
       assert.ok(Math.abs(ratio / expected - 1) <= bound + 1e-9, `${cue} ${JSON.stringify(context)}`);
@@ -745,6 +895,8 @@ test("every cue renders, deprecated names play, and every keystroke varies withi
 
 test("binding is delegated, dynamic, idempotent, and plays one cue per action", async (context) => {
   context.after(restoreGlobals);
+  // the context each binding passes is read off exact pitches, so no per-play variation
+  context.mock.method(Math, "random", () => 0.5);
   const { RECIPES } = await import("../dist/sounds/recipes.js");
   const gainOf = (cue) => RECIPES[cue].masterGain;
   // Cues are identified by master gain below, so the ones asserted on must differ.
@@ -774,6 +926,9 @@ test("binding is delegated, dynamic, idempotent, and plays one cue per action", 
       // The first gain of each render is its master.
       if (masters.length === renders) masters.push(gain);
       return gain;
+    }
+    createConvolver() {
+      return Object.assign(new AudioNodeStub(), { buffer: null, normalize: true });
     }
     createDynamicsCompressor() {
       masters.pop(); // the gain just created was the shared output bus, not a master
@@ -1103,19 +1258,37 @@ test("binding is delegated, dynamic, idempotent, and plays one cue per action", 
   ]) {
     assert.equal(sinks(element), false);
   }
+
+  // a marked label around its control plays once: the browser forwards the label's click to the
+  // control, and that second click carries the control's new state
+  const wifi = new FakeElement(bubbly, "LABEL", { "data-cuelume-toggle": "" });
+  const box = Object.assign(new FakeElement(wifi, "INPUT"), { type: "checkbox", checked: true });
+  wifi.control = box;
+  now += 1_000;
+  played(0, () => root.emit("click", wifi));
+  now += 1_000;
+  played(1, () => root.emit("click", box));
+  assert.equal(sinks(box), false);
+  box.checked = false;
+  assert.equal(sinks(box), true);
+  // a label whose control sits elsewhere is the only click that finds the mark, so it still plays
+  const detached = new FakeElement(bubbly, "LABEL", { "data-cuelume-toggle": "" });
+  detached.control = Object.assign(new FakeElement(root, "INPUT"), { type: "checkbox", checked: false });
+  now += 1_000;
+  played(1, () => root.emit("click", detached));
 });
 
-test("finished shimmer graphs disconnect after their audible tail", async (context) => {
+test("every play rings into one shared room, and a finished play lets go of it", async (context) => {
   context.after(restoreGlobals);
   const timers = [];
   const disconnected = [];
-  const nodes = new Map();
+  const made = [];
 
   class AudioNodeStub {
     constructor(name) {
       this.name = name;
       this.connections = [];
-      nodes.set(name, this);
+      made.push(this);
     }
     connect(destination) {
       this.connections.push(destination);
@@ -1127,34 +1300,33 @@ test("finished shimmer graphs disconnect after their audible tail", async (conte
   }
 
   let gainCount = 0;
-  class CleanupContext {
+  class RoomContext {
     state = "running";
     currentTime = 0;
-    sampleRate = 1;
+    sampleRate = 8000;
     destination = new AudioNodeStub("destination");
     createGain() {
-      const names = ["output", "master", "feedback-gain", "wet-gain", "tone-gain", "tone-gain"];
-      return Object.assign(new AudioNodeStub(names[gainCount++] ?? "gain"), { gain: audioParam() });
+      const names = ["output", "master", "send"];
+      return Object.assign(new AudioNodeStub(names[gainCount++] ?? "layer-gain"), { gain: audioParam() });
     }
     createDynamicsCompressor() {
       return compressor(new AudioNodeStub("limiter"));
     }
-    createDelay() {
-      return Object.assign(new AudioNodeStub("delay"), { delayTime: audioParam() });
+    createConvolver() {
+      return Object.assign(new AudioNodeStub("room"), { buffer: null, normalize: true });
+    }
+    createBuffer(channels, length) {
+      const data = Array.from({ length: channels }, () => new Float32Array(length));
+      return { numberOfChannels: channels, getChannelData: (channel) => data[channel] };
+    }
+    createBufferSource() {
+      return Object.assign(new AudioNodeStub("noise"), { buffer: null, start() {}, stop() {} });
     }
     createBiquadFilter() {
-      return Object.assign(new AudioNodeStub("feedback-filter"), {
-        frequency: audioParam(),
-        Q: audioParam(),
-      });
+      return Object.assign(new AudioNodeStub("filter"), { frequency: audioParam(), Q: audioParam() });
     }
     createOscillator() {
-      return Object.assign(new AudioNodeStub("oscillator"), {
-        frequency: audioParam(),
-        detune: audioParam(),
-        start() {},
-        stop() {},
-      });
+      return Object.assign(new AudioNodeStub("oscillator"), { frequency: audioParam(), detune: audioParam(), start() {}, stop() {} });
     }
   }
 
@@ -1162,20 +1334,47 @@ test("finished shimmer graphs disconnect after their audible tail", async (conte
     timers.push({ callback, delay });
     return 0;
   });
-  setGlobal("window", { AudioContext: CleanupContext });
+  setGlobal("window", { AudioContext: RoomContext });
 
-  const { play } = await import(`../dist/audio/engine.js?cleanup=${Date.now()}`);
+  const { play } = await import(`../dist/audio/engine.js?room=${Date.now()}`);
+  const { RECIPES, LANDED } = await import("../dist/sounds/recipes.js");
   play("success");
 
+  const node = (name) => made.find((n) => n.name === name);
+  const [output, master, send, room] = ["output", "master", "send", "room"].map(node);
+  // dry to the output, and a faint send through the walls into the room, which returns to the output
+  assert.ok(master.connections.includes(output) && master.connections.includes(send));
+  const walls = send.connections[0];
+  assert.deepEqual(walls.connections, [room]);
+  assert.deepEqual(room.connections, [output]);
+  assert.deepEqual(output.connections, [node("limiter")]);
+  // success lands, so it rings into the room more than a tap does
+  assert.equal(RECIPES.success.room, LANDED);
+  assert.ok(send.gain.value > 0.05 * LANDED && send.gain.value < 0.1 * LANDED);
+  // the room is stereo, silent before its first reflection, then dies away, each channel at unit energy
+  assert.equal(room.normalize, false);
+  const impulse = [0, 1].map((channel) => room.buffer.getChannelData(channel));
+  for (const data of impulse) {
+    assert.equal(data[0], 0);
+    const energy = data.reduce((sum, x) => sum + x * x, 0);
+    assert.ok(Math.abs(energy - 1) < 1e-4);
+    const quarter = data.length / 4;
+    const early = data.slice(0, quarter).reduce((sum, x) => sum + x * x, 0);
+    const late = data.slice(-quarter).reduce((sum, x) => sum + x * x, 0);
+    assert.ok(early > 100 * late);
+  }
+  assert.notDeepEqual(impulse[0], impulse[1]);
+
+  // one cleanup, when the last layer has finished; the room itself stays up for the next play
   assert.equal(timers.length, 1);
-  assert.equal(Math.round(timers[0].delay), 658);
-  assert.equal(nodes.get("master").connections.includes(nodes.get("output")), true);
-  assert.equal(nodes.get("wet-gain").connections.includes(nodes.get("output")), true);
-  assert.deepEqual(nodes.get("output").connections, [nodes.get("limiter")]);
-  assert.deepEqual(nodes.get("limiter").connections, [nodes.get("destination")]);
+  const longest = Math.max(...RECIPES.success.layers.filter((l) => l.from !== "strong").map((l) => l.attack + l.decay));
+  assert.equal(Math.round(timers[0].delay), Math.round((longest + 0.1) * 1000));
   timers[0].callback();
-  assert.deepEqual(disconnected, ["master", "delay", "feedback-filter", "feedback-gain", "wet-gain"]);
+  assert.deepEqual(disconnected, ["master", "send"]);
 
-  play("success");
-  assert.equal(timers.length, 2);
+  // the room and the noise are built once, not per play
+  const rooms = made.filter((n) => n.name === "room").length;
+  play("tap");
+  play("type");
+  assert.equal(made.filter((n) => n.name === "room").length, rooms);
 });
